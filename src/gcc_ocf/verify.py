@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any
 
 from gcc_ocf.core.gca import GCAReader
 from gcc_ocf.engine.container_v6 import unpack_container_v6
-from gcc_ocf.errors import BadMagic, CorruptPayload, HashMismatch, MissingResource, UnsupportedVersion
-
+from gcc_ocf.errors import (
+    BadMagic,
+    CorruptPayload,
+    HashMismatch,
+    MissingResource,
+    UnsupportedVersion,
+)
 
 CHUNK_SIZE_DEFAULT = 256 * 1024
 
@@ -37,7 +43,7 @@ def sha256_file(path: Path, *, chunk_size: int = CHUNK_SIZE_DEFAULT) -> str:
     return h.hexdigest()
 
 
-def _iter_manifest_records(manifest_path: Path) -> Iterator[Dict[str, Any]]:
+def _iter_manifest_records(manifest_path: Path) -> Iterator[dict[str, Any]]:
     with Path(manifest_path).open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -120,7 +126,9 @@ def verify_gca(path: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_D
                         raise HashMismatch(f"GCA blob CRC mismatch per {rel}")
 
 
-def verify_packed_dir(output_dir: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_DEFAULT) -> None:
+def verify_packed_dir(
+    output_dir: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_DEFAULT
+) -> None:
     """Verify a packed directory (manifest + GCA1 archives)."""
     out = Path(output_dir)
     manifest = out / "manifest.jsonl"
@@ -128,9 +136,9 @@ def verify_packed_dir(output_dir: Path, *, full: bool = False, chunk_size: int =
         raise CorruptPayload(f"manifest non trovato: {manifest}")
 
     # Collect file records + bucket summaries
-    file_recs: List[Dict[str, Any]] = []
-    needed_archives: Dict[str, List[Dict[str, Any]]] = {}
-    bucket_summaries: Dict[int, Dict[str, Any]] = {}
+    file_recs: list[dict[str, Any]] = []
+    needed_archives: dict[str, list[dict[str, Any]]] = {}
+    bucket_summaries: dict[int, dict[str, Any]] = {}
 
     for rec in _iter_manifest_records(manifest):
         if rec.get("kind") == "bucket_summary":
@@ -157,7 +165,7 @@ def verify_packed_dir(output_dir: Path, *, full: bool = False, chunk_size: int =
         p = out / arch
         with GCAReader(p) as rd:
             idx = list(rd.iter_index())
-            by_rel: Dict[str, Dict[str, Any]] = {}
+            by_rel: dict[str, dict[str, Any]] = {}
             for e in idx:
                 if not isinstance(e, dict) or str(e.get("kind")) == "trailer":
                     continue
@@ -197,34 +205,50 @@ def verify_packed_dir(output_dir: Path, *, full: bool = False, chunk_size: int =
                 for b in sorted(buckets_here):
                     bs = bucket_summaries.get(b) or {}
                     declared = (bs.get("bucket_resources") or []) if isinstance(bs, dict) else []
-                    meta_map = (bs.get("bucket_resources_meta") or {}) if isinstance(bs, dict) else {}
+                    meta_map = (
+                        (bs.get("bucket_resources_meta") or {}) if isinstance(bs, dict) else {}
+                    )
                     for name in declared:
                         if name not in res:
-                            raise MissingResource(f"resource mancante in {arch}: bucket={b} name={name}")
+                            raise MissingResource(
+                                f"resource mancante in {arch}: bucket={b} name={name}"
+                            )
                         exp_sha = str((meta_map.get(name) or {}).get("blob_sha256") or "")
-                        got_sha = str((res.get(name) or {}).get("meta", {}).get("blob_sha256") or "")
+                        got_sha = str(
+                            (res.get(name) or {}).get("meta", {}).get("blob_sha256") or ""
+                        )
                         if exp_sha and got_sha and exp_sha != got_sha:
                             raise HashMismatch(f"resource sha mismatch: {arch} {name}")
                         if full and exp_sha:
                             # recompute
                             # find entry in index
                             for e in idx:
-                                if isinstance(e, dict) and (str(e.get("rel") or "") in (f"__res__/{name}",)):
+                                if isinstance(e, dict) and (
+                                    str(e.get("rel") or "") in (f"__res__/{name}",)
+                                ):
                                     off = int(e.get("offset") or 0)
                                     ln = int(e.get("length") or 0)
                                     if ln > 0:
-                                        recomputed, recomputed_crc = rd.sha256_crc32_blob(off, ln, chunk_size=chunk_size)
+                                        recomputed, recomputed_crc = rd.sha256_crc32_blob(
+                                            off, ln, chunk_size=chunk_size
+                                        )
                                         if recomputed != exp_sha:
-                                            raise HashMismatch(f"resource blob hash mismatch: {arch} {name}")
+                                            raise HashMismatch(
+                                                f"resource blob hash mismatch: {arch} {name}"
+                                            )
                                         exp_crc = e.get("blob_crc32")
                                         if exp_crc is not None:
                                             try:
                                                 exp_crc_i = int(exp_crc)
                                             except Exception:
-                                                raise CorruptPayload(f"GCA blob_crc32 malformato per resource {name}")
+                                                raise CorruptPayload(
+                                                    f"GCA blob_crc32 malformato per resource {name}"
+                                                )
                                             if int(recomputed_crc) != exp_crc_i:
-                                                raise HashMismatch(f"resource blob CRC mismatch: {arch} {name}")
-                                        
+                                                raise HashMismatch(
+                                                    f"resource blob CRC mismatch: {arch} {name}"
+                                                )
+
                                     break
 
 
@@ -241,7 +265,7 @@ def verify_container_file(path: Path, *, full: bool = False) -> None:
         raise CorruptPayload(f"file non trovato: {p}")
     blob = p.read_bytes()
     try:
-        h = unpack_container_v6(blob)
+        unpack_container_v6(blob)
     except ValueError as e:
         msg = str(e)
         if "magic" in msg:
