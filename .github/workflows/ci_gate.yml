@@ -38,6 +38,13 @@ jobs:
         run: |
           pytest -q
 
+      - name: Docs gate (exit_codes.md up-to-date)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/gen_exit_codes_md.py
+          git diff --exit-code docs/exit_codes.md
+
       - name: CLI gate (help/version + smoke file/dir)
         shell: bash
         run: |
