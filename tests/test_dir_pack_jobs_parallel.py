@@ -22,7 +22,9 @@ def _write_fattura_like(dir_: Path, *, n: int = 12) -> None:
         (dir_ / f"fattura_{i:02d}.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_pack_unpack_dir_parallel_jobs_roundtrips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pack_unpack_dir_parallel_jobs_roundtrips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from gcc_ocf.legacy import gcc_dir as gd
 
     # Isolate TOP db writes away from the real repo

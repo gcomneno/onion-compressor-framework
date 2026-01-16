@@ -7,6 +7,7 @@ try:
 except Exception:  # pragma: no cover
     zstd = None
 
+
 @dataclass
 class CodecZstd:
     """
@@ -17,6 +18,7 @@ class CodecZstd:
       - no content size nel frame
       - no checksum
     """
+
     level: int = 19
     codec_id: str = "zstd"
     tight: bool = False

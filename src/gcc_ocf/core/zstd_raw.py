@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Tuple
-
 from gcc_ocf.core.codec_zstd import CodecZstd
 
 ZRAW1_MAGIC = b"ZRAW1"
+
 
 def _enc_varint(x: int) -> bytes:
     if x < 0:
@@ -20,7 +19,8 @@ def _enc_varint(x: int) -> bytes:
             break
     return bytes(out)
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -36,6 +36,7 @@ def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
             raise ValueError("varint troppo grande")
     return x, idx
 
+
 def pack_zstd_raw(data: bytes, codec: CodecZstd) -> bytes:
     """
     Layout:
@@ -44,6 +45,7 @@ def pack_zstd_raw(data: bytes, codec: CodecZstd) -> bytes:
     raw = bytes(data)
     comp = codec.compress(raw)
     return ZRAW1_MAGIC + _enc_varint(len(raw)) + comp
+
 
 def unpack_zstd_raw(blob: bytes, codec: CodecZstd) -> bytes:
     if len(blob) < 5 or blob[:5] != ZRAW1_MAGIC:

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Tuple
-
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]{2,}")
 
@@ -23,7 +21,7 @@ def _h64(data: bytes) -> int:
     return int.from_bytes(hashlib.blake2b(data, digest_size=8).digest(), "big")
 
 
-def _simhash64(weighted_hashes: Iterable[Tuple[int, int]]) -> int:
+def _simhash64(weighted_hashes: Iterable[tuple[int, int]]) -> int:
     # weighted_hashes: (h64, weight)
     acc = [0] * 64
     for h, w in weighted_hashes:
@@ -33,7 +31,7 @@ def _simhash64(weighted_hashes: Iterable[Tuple[int, int]]) -> int:
     out = 0
     for i, v in enumerate(acc):
         if v >= 0:
-            out |= (1 << i)
+            out |= 1 << i
     return out
 
 
@@ -53,17 +51,26 @@ def fingerprint_bytes(data: bytes, *, max_bytes: int = 1_000_000) -> Fingerprint
             # fallback: by lines
             chunks = [c for c in txt.splitlines() if c.strip()]
             wh = [(_h64(c.encode("utf-8")), 1) for c in chunks[:5000]]
-            return Fingerprint(algo="simhash64:lines", simhash64=_simhash64(wh), is_text=True, token_count=len(chunks))
+            return Fingerprint(
+                algo="simhash64:lines",
+                simhash64=_simhash64(wh),
+                is_text=True,
+                token_count=len(chunks),
+            )
         # freq-limited weights
         freq: dict[str, int] = {}
         for t in toks:
             freq[t] = min(freq.get(t, 0) + 1, 20)
         wh = [(_h64(k.encode("utf-8")), v) for k, v in freq.items()]
-        return Fingerprint(algo="simhash64:tokens", simhash64=_simhash64(wh), is_text=True, token_count=len(toks))
+        return Fingerprint(
+            algo="simhash64:tokens", simhash64=_simhash64(wh), is_text=True, token_count=len(toks)
+        )
 
     # binary: 4-byte shingles
     wh = []
     step = 4
     for i in range(0, min(len(b), 200_000) - step + 1, step):
-        wh.append((_h64(b[i:i+step]), 1))
-    return Fingerprint(algo="simhash64:bin4", simhash64=_simhash64(wh), is_text=False, token_count=len(wh))
+        wh.append((_h64(b[i : i + step]), 1))
+    return Fingerprint(
+        algo="simhash64:bin4", simhash64=_simhash64(wh), is_text=False, token_count=len(wh)
+    )

@@ -1,43 +1,30 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple
-
 import base64
 import json
+from dataclasses import dataclass
+from typing import Any
 
+from gcc_ocf.core.codec_huffman import CodecHuffman
+from gcc_ocf.core.codec_num_v0 import CodecNumV0
+from gcc_ocf.core.codec_num_v1 import CodecNumV1
+from gcc_ocf.core.codec_raw import CodecRaw
+from gcc_ocf.core.codec_zlib import CodecZlib
+from gcc_ocf.core.codec_zstd import CodecZstd
+from gcc_ocf.core.v5_dispatch import decode_v5_payload, encode_v5_payload
 from gcc_ocf.layers.bytes import LayerBytes
-from gcc_ocf.layers.vc0 import LayerVC0
-from gcc_ocf.layers.syllables_it import LayerSyllablesIT
-from gcc_ocf.layers.words_it import LayerWordsIT
 from gcc_ocf.layers.lines_dict import LayerLinesDict
 from gcc_ocf.layers.lines_rle import LayerLinesRLE
 from gcc_ocf.layers.split_text_nums import LayerSplitTextNums
-from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0
+from gcc_ocf.layers.syllables_it import LayerSyllablesIT
 from gcc_ocf.layers.tpl_lines_shared_v0 import LayerTplLinesSharedV0
-
-from gcc_ocf.core.codec_huffman import CodecHuffman
-from gcc_ocf.core.codec_zstd import CodecZstd
-from gcc_ocf.core.codec_zlib import CodecZlib
-from gcc_ocf.core.codec_raw import CodecRaw
-from gcc_ocf.core.codec_num_v0 import CodecNumV0
-from gcc_ocf.core.codec_num_v1 import CodecNumV1
-from gcc_ocf.core.v5_dispatch import encode_v5_payload, decode_v5_payload
-from gcc_ocf.core.legacy_payloads import (
-    KIND_BYTES,
-    KIND_IDS,
-    KIND_IDS_META_VOCAB,
-    KIND_IDS_INLINE_VOCAB,
-    pack_huffman_payload_bytes,
-    unpack_huffman_payload_bytes,
-    pack_huffman_payload_ids,
-    unpack_huffman_payload_ids,
-    pack_huffman_payload_ids_inline_vocab,
-    unpack_huffman_payload_ids_inline_vocab,
-)
+from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0
+from gcc_ocf.layers.vc0 import LayerVC0
+from gcc_ocf.layers.words_it import LayerWordsIT
 
 MAGIC = b"GCC"
 VERSION_CONTAINER_V5 = 5
+
 
 # -------------------
 # Meta encoding (JSON + base64 per bytes)
@@ -53,7 +40,7 @@ def _meta_to_jsonable(obj: Any) -> Any:
     if isinstance(obj, tuple):
         return {"__t": "tuple", "items": [_meta_to_jsonable(x) for x in obj]}
     if isinstance(obj, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in obj.items():
             out[str(k)] = _meta_to_jsonable(v)
         return out
@@ -75,12 +62,12 @@ def _meta_from_jsonable(obj: Any) -> Any:
     raise TypeError(f"meta JSON inatteso: {type(obj)}")
 
 
-def encode_meta(meta: Dict[str, Any]) -> bytes:
+def encode_meta(meta: dict[str, Any]) -> bytes:
     jsonable = _meta_to_jsonable(meta)
     return json.dumps(jsonable, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def decode_meta(meta_bytes: bytes) -> Dict[str, Any]:
+def decode_meta(meta_bytes: bytes) -> dict[str, Any]:
     if not meta_bytes:
         return {}
     obj = json.loads(meta_bytes.decode("utf-8"))
@@ -94,7 +81,7 @@ def decode_meta(meta_bytes: bytes) -> Dict[str, Any]:
 # Container v5
 # [MAGIC(3)|VER(1)|LAYERLEN(1)|LAYER|CODECLEN(1)|CODEC|META_LEN(u32)|META|PAYLOAD_LEN(u32)|PAYLOAD]
 # -------------------
-def pack_container_v5(layer_id: str, codec_id: str, meta: Dict[str, Any], payload: bytes) -> bytes:
+def pack_container_v5(layer_id: str, codec_id: str, meta: dict[str, Any], payload: bytes) -> bytes:
     layer_b = layer_id.encode("utf-8")
     codec_b = codec_id.encode("utf-8")
     if len(layer_b) > 0xFF or len(codec_b) > 0xFF:
@@ -118,12 +105,12 @@ def pack_container_v5(layer_id: str, codec_id: str, meta: Dict[str, Any], payloa
     return bytes(out)
 
 
-def unpack_container_v5(blob: bytes) -> Tuple[str, str, Dict[str, Any], bytes]:
+def unpack_container_v5(blob: bytes) -> tuple[str, str, dict[str, Any], bytes]:
     if len(blob) < 3 + 1 + 1 + 1 + 4 + 4:
         raise ValueError("blob troppo corto per container v5")
 
     idx = 0
-    if blob[idx:idx + 3] != MAGIC:
+    if blob[idx : idx + 3] != MAGIC:
         raise ValueError("Magic number non valido")
     idx += 3
 
@@ -134,22 +121,22 @@ def unpack_container_v5(blob: bytes) -> Tuple[str, str, Dict[str, Any], bytes]:
 
     layer_len = blob[idx]
     idx += 1
-    layer_id = blob[idx:idx + layer_len].decode("utf-8")
+    layer_id = blob[idx : idx + layer_len].decode("utf-8")
     idx += layer_len
 
     codec_len = blob[idx]
     idx += 1
-    codec_id = blob[idx:idx + codec_len].decode("utf-8")
+    codec_id = blob[idx : idx + codec_len].decode("utf-8")
     idx += codec_len
 
-    meta_len = int.from_bytes(blob[idx:idx + 4], "big")
+    meta_len = int.from_bytes(blob[idx : idx + 4], "big")
     idx += 4
-    meta_b = blob[idx:idx + meta_len]
+    meta_b = blob[idx : idx + meta_len]
     idx += meta_len
 
-    payload_len = int.from_bytes(blob[idx:idx + 4], "big")
+    payload_len = int.from_bytes(blob[idx : idx + 4], "big")
     idx += 4
-    payload = blob[idx:idx + payload_len]
+    payload = blob[idx : idx + payload_len]
     idx += payload_len
 
     meta = decode_meta(meta_b)
@@ -161,11 +148,11 @@ def unpack_container_v5(blob: bytes) -> Tuple[str, str, Dict[str, Any], bytes]:
 # -------------------
 @dataclass
 class Engine:
-    layers: Dict[str, Any]
-    codecs: Dict[str, Any]
+    layers: dict[str, Any]
+    codecs: dict[str, Any]
 
     @classmethod
-    def default(cls) -> "Engine":
+    def default(cls) -> Engine:
         layers = {
             "bytes": LayerBytes(),
             "vc0": LayerVC0(),
@@ -190,7 +177,9 @@ class Engine:
 
         return cls(layers=layers, codecs=codecs)
 
-    def compress(self, input_bytes: bytes, layer_id: str = "bytes", codec_id: str = "huffman") -> bytes:
+    def compress(
+        self, input_bytes: bytes, layer_id: str = "bytes", codec_id: str = "huffman"
+    ) -> bytes:
         if layer_id not in self.layers:
             raise ValueError(f"Layer non supportato: {layer_id}")
         if codec_id not in self.codecs:
@@ -216,4 +205,6 @@ class Engine:
         layer = self.layers[layer_id]
         codec = self.codecs[codec_id]
 
-        return decode_v5_payload(payload, container_meta=meta, layer_id=layer_id, layer=layer, codec=codec)
+        return decode_v5_payload(
+            payload, container_meta=meta, layer_id=layer_id, layer=layer, codec=codec
+        )

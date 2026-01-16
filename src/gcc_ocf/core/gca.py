@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """GCA: simple bucket archive wrapper.
 
 This is *not* a new compression container.
@@ -21,14 +19,16 @@ Each line is a dict with at least: rel, offset, length.
 The archive is append-friendly: write blobs first, then index+trailer.
 """
 
+from __future__ import annotations
+
+import hashlib
 import json
 import struct
 import zlib
-import hashlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Dict, Iterator, List, Optional
-
+from typing import BinaryIO
 
 GCA_MAGIC = b"GCA1"
 TRAILER_LEN = 16
@@ -39,7 +39,7 @@ class GCAEntry:
     rel: str
     offset: int
     length: int
-    meta: Dict
+    meta: dict
 
 
 def _crc32(data: bytes) -> int:
@@ -51,10 +51,10 @@ class GCAWriter:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fp: BinaryIO = self.path.open("wb")
-        self._entries: List[GCAEntry] = []
+        self._entries: list[GCAEntry] = []
         self._closed = False
 
-    def append(self, rel: str, blob: bytes, *, meta: Optional[Dict] = None) -> GCAEntry:
+    def append(self, rel: str, blob: bytes, *, meta: dict | None = None) -> GCAEntry:
         if self._closed:
             raise ValueError("GCAWriter: append su writer chiuso")
         if meta is None:
@@ -72,7 +72,7 @@ class GCAWriter:
         self._entries.append(ent)
         return ent
 
-    def append_resource(self, name: str, blob: bytes, *, meta: Optional[Dict] = None) -> GCAEntry:
+    def append_resource(self, name: str, blob: bytes, *, meta: dict | None = None) -> GCAEntry:
         """Append a bucket-level resource.
 
         Resources are stored as regular blobs, but with a reserved rel prefix.
@@ -90,7 +90,7 @@ class GCAWriter:
         if self._closed:
             return
         # Build JSONL index
-        lines: List[str] = []
+        lines: list[str] = []
         for e in self._entries:
             d = {"rel": e.rel, "offset": int(e.offset), "length": int(e.length)}
             # include meta (may contain sha256, plan, etc.)
@@ -123,7 +123,7 @@ class GCAWriter:
         self._fp.close()
         self._closed = True
 
-    def __enter__(self) -> "GCAWriter":
+    def __enter__(self) -> GCAWriter:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -134,8 +134,8 @@ class GCAReader:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._fp: BinaryIO = self.path.open("rb")
-        self._index: Optional[List[Dict]] = None
-        self._index_raw: Optional[bytes] = None
+        self._index: list[dict] | None = None
+        self._index_raw: bytes | None = None
 
     def close(self) -> None:
         try:
@@ -143,7 +143,7 @@ class GCAReader:
         except Exception:
             pass
 
-    def _load_index(self) -> List[Dict]:
+    def _load_index(self) -> list[dict]:
         if self._index is not None:
             return self._index
         self._fp.seek(0, 2)
@@ -168,7 +168,7 @@ class GCAReader:
             raise ValueError("GCAReader: CRC index mismatch")
         idx_raw = zlib.decompress(idx_z)
         self._index_raw = idx_raw
-        out: List[Dict] = []
+        out: list[dict] = []
         for line in idx_raw.decode("utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -182,7 +182,7 @@ class GCAReader:
         self._load_index()
         return bytes(self._index_raw or b"")
 
-    def index_trailer(self) -> Optional[Dict]:
+    def index_trailer(self) -> dict | None:
         """Return the parsed trailer record (last JSONL line) if present."""
         idx = self._load_index()
         if not idx:
@@ -192,16 +192,15 @@ class GCAReader:
             return last
         return None
 
-    def iter_index(self) -> Iterator[Dict]:
-        for e in self._load_index():
-            yield e
+    def iter_index(self) -> Iterator[dict]:
+        yield from self._load_index()
 
-    def load_resources(self) -> Dict[str, Dict]:
+    def load_resources(self) -> dict[str, dict]:
         """Load bucket-level resources.
 
         Returns a dict: name -> {"blob": bytes, "meta": dict}.
         """
-        res: Dict[str, Dict] = {}
+        res: dict[str, dict] = {}
         for e in self._load_index():
             if not isinstance(e, dict):
                 continue
@@ -252,7 +251,9 @@ class GCAReader:
             raise ValueError("GCAReader: blob troncato")
         return h.hexdigest()
 
-    def sha256_crc32_blob(self, offset: int, length: int, *, chunk_size: int = 256 * 1024) -> tuple[str, int]:
+    def sha256_crc32_blob(
+        self, offset: int, length: int, *, chunk_size: int = 256 * 1024
+    ) -> tuple[str, int]:
         """Compute sha256 and crc32 for a blob segment in a single streaming pass."""
         if length < 0 or offset < 0:
             raise ValueError("GCAReader: offset/length non validi")
@@ -274,7 +275,7 @@ class GCAReader:
             raise ValueError("GCAReader: blob troncato")
         return h.hexdigest(), (crc & 0xFFFFFFFF)
 
-    def __enter__(self) -> "GCAReader":
+    def __enter__(self) -> GCAReader:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

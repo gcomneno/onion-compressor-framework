@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any
+
 from gcc_ocf.layers.vocab_blob import pack_vocab_list, unpack_vocab_list
+
 
 def _is_ascii_letter(b: int) -> bool:
     return (65 <= b <= 90) or (97 <= b <= 122)  # A-Z a-z
 
-def _tokenize_words_and_other(data: bytes) -> List[bytes]:
+
+def _tokenize_words_and_other(data: bytes) -> list[bytes]:
     """
     Tokenizza in:
       - parole = sequenze ASCII [A-Za-z]+
@@ -15,7 +19,7 @@ def _tokenize_words_and_other(data: bytes) -> List[bytes]:
 
     Deve restare compatibile con la logica legacy di v4.
     """
-    tokens: List[bytes] = []
+    tokens: list[bytes] = []
     i = 0
     n = len(data)
 
@@ -36,6 +40,7 @@ def _tokenize_words_and_other(data: bytes) -> List[bytes]:
 
     return tokens
 
+
 @dataclass(frozen=True)
 class LayerWordsIT:
     """
@@ -43,14 +48,15 @@ class LayerWordsIT:
     encode: bytes -> (id_stream, meta{vocab_list})
     decode: id_stream + vocab_list -> bytes
     """
+
     id: str = "words_it"
 
-    def encode(self, data: bytes) -> Tuple[List[int], Dict[str, Any]]:
+    def encode(self, data: bytes) -> tuple[list[int], dict[str, Any]]:
         tokens = _tokenize_words_and_other(data)
 
-        vocab: Dict[bytes, int] = {}
-        vocab_list: List[bytes] = []
-        id_stream: List[int] = []
+        vocab: dict[bytes, int] = {}
+        vocab_list: list[bytes] = []
+        id_stream: list[int] = []
 
         # IMPORTANTISSIMO: ordine "first seen" identico al legacy
         for tok in tokens:
@@ -61,7 +67,7 @@ class LayerWordsIT:
 
         return id_stream, {"vocab_list": vocab_list}
 
-    def decode(self, id_stream: Sequence[int], layer_meta: Dict[str, Any]) -> bytes:
+    def decode(self, id_stream: Sequence[int], layer_meta: dict[str, Any]) -> bytes:
         vocab_list = layer_meta.get("vocab_list")
         if vocab_list is None:
             raise ValueError("LayerWordsIT.decode: manca vocab_list in layer_meta")
@@ -73,13 +79,13 @@ class LayerWordsIT:
             out += vocab_list[sid]
         return bytes(out)
 
-    def pack_meta(self, meta: Dict[str, Any]) -> bytes:
+    def pack_meta(self, meta: dict[str, Any]) -> bytes:
         vocab_list = meta.get("vocab_list")
         if vocab_list is None:
             return b""
         return pack_vocab_list(vocab_list)
 
-    def unpack_meta(self, meta_bytes: bytes) -> Dict[str, Any]:
+    def unpack_meta(self, meta_bytes: bytes) -> dict[str, Any]:
         if not meta_bytes:
             return {"vocab_list": []}
         return {"vocab_list": unpack_vocab_list(meta_bytes)}

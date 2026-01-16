@@ -39,44 +39,46 @@ without inventing new containers or breaking bench/roundtrip.
 
 from __future__ import annotations
 
+try:
+    import zstandard as zstd  # type: ignore
+except Exception:  # pragma: no cover
+    zstd = None
+
 import hashlib
-import math
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any
 
 from gcc_ocf.analyzer.bucketize import bucketize_records, iter_files
 from gcc_ocf.analyzer.simhash import fingerprint_bytes
-
-from gcc_ocf.engine.container import Engine
-from gcc_ocf.engine.container_v6 import compress_v6_mbn, decompress_v6
-from gcc_ocf.core.gca import GCAReader, GCAWriter
-from gcc_ocf.core.num_stream import decode_ints, encode_ints
 from gcc_ocf.core.codec_num_v1 import CodecNumV1
-from gcc_ocf.layers.tpl_lines_v0 import _unpack_templates as _tpl_v0_unpack_templates
-from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0
-from gcc_ocf.layers.tpl_lines_shared_v0 import (
-    LayerTplLinesSharedV0,
-    pack_tpl_dict_v0_resource,
-    unpack_tpl_dict_v0_resource,
-)
+from gcc_ocf.core.gca import GCAReader, GCAWriter
 from gcc_ocf.core.mbn_bundle import (
     ST_CONS,
+    ST_IDS,
     ST_MAIN,
     ST_MASK,
     ST_META,
     ST_NUMS,
     ST_TEXT,
-    ST_VOWELS,
     ST_TPL,
-    ST_IDS,
+    ST_VOWELS,
 )
-
+from gcc_ocf.core.num_stream import decode_ints, encode_ints
 from gcc_ocf.dir_pipeline_spec import DirPipelineSpec
-
+from gcc_ocf.engine.container import Engine
+from gcc_ocf.engine.container_v6 import compress_v6_mbn, decompress_v6
+from gcc_ocf.layers.tpl_lines_shared_v0 import (
+    LayerTplLinesSharedV0,
+    pack_tpl_dict_v0_resource,
+    unpack_tpl_dict_v0_resource,
+)
+from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0
+from gcc_ocf.layers.tpl_lines_v0 import _unpack_templates as _tpl_v0_unpack_templates
 
 MANIFEST_NAME = "manifest.jsonl"
 ARCHIVE_PREFIX = "bucket_"
@@ -109,7 +111,7 @@ TPL_DICT_K_DEFAULT = 128
 class Plan:
     layer_id: str
     codec_text: str  # codec used for MAIN/TEXT and other non-numeric streams
-    stream_codecs: Optional[Dict[int, str]] = None  # optional overrides by stream type
+    stream_codecs: dict[int, str] | None = None  # optional overrides by stream type
     note: str = ""
 
 
@@ -147,12 +149,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _have_zstd() -> bool:
-    try:
-        import zstandard  # noqa: F401
-
-        return True
-    except Exception:
-        return False
+    return zstd is not None
 
 
 def _resolve_codec_id(codec_id: str, *, have_zstd: bool) -> str:
@@ -162,7 +159,7 @@ def _resolve_codec_id(codec_id: str, *, have_zstd: bool) -> str:
     return cid
 
 
-def _resolve_stream_codecs(sc: Optional[Dict[int, str]], *, have_zstd: bool) -> Optional[Dict[int, str]]:
+def _resolve_stream_codecs(sc: dict[int, str] | None, *, have_zstd: bool) -> dict[int, str] | None:
     if not sc:
         return None
     out = {}
@@ -171,7 +168,9 @@ def _resolve_stream_codecs(sc: Optional[Dict[int, str]], *, have_zstd: bool) -> 
     return out
 
 
-def _cpu_penalty(plan: Plan, *, resolved_codec_text: str, resolved_sc: Optional[Dict[int, str]]) -> float:
+def _cpu_penalty(
+    plan: Plan, *, resolved_codec_text: str, resolved_sc: dict[int, str] | None
+) -> float:
     """Small deterministic penalty (tie-break + avoid fragile expensive plans)."""
     layer_p = {
         "bytes": 0.000,
@@ -184,7 +183,11 @@ def _cpu_penalty(plan: Plan, *, resolved_codec_text: str, resolved_sc: Optional[
     if resolved_codec_text == "zstd_tight":
         codec_p += 0.005
     # num_v1 penalty if present in any numeric stream
-    uses_num = any(v == "num_v1" for v in (resolved_sc or {}).values()) or plan.layer_id in ("split_text_nums", "tpl_lines_v0", "tpl_lines_shared_v0")
+    uses_num = any(v == "num_v1" for v in (resolved_sc or {}).values()) or plan.layer_id in (
+        "split_text_nums",
+        "tpl_lines_v0",
+        "tpl_lines_shared_v0",
+    )
     num_p = 0.005 if uses_num else 0.0
     return float(layer_p + codec_p + num_p)
 
@@ -193,7 +196,7 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _engine_with_num_shared(base: Engine, dict_vals: List[int], tag8: bytes) -> Engine:
+def _engine_with_num_shared(base: Engine, dict_vals: list[int], tag8: bytes) -> Engine:
     """Return a new Engine whose num_v1 codec is configured with a shared dict."""
     eng = Engine(layers=base.layers, codecs=dict(base.codecs))
     c = CodecNumV1()
@@ -202,7 +205,7 @@ def _engine_with_num_shared(base: Engine, dict_vals: List[int], tag8: bytes) -> 
     return eng
 
 
-def _engine_with_tpl_shared(base: Engine, templates: List[List[bytes]], tag8: bytes) -> Engine:
+def _engine_with_tpl_shared(base: Engine, templates: list[list[bytes]], tag8: bytes) -> Engine:
     """Return a new Engine whose tpl_lines_shared_v0 layer is configured with a shared dict."""
     layers = dict(base.layers)
     lyr = LayerTplLinesSharedV0()
@@ -219,7 +222,7 @@ def _numeric_density(data: bytes) -> float:
     return digits / len(data)
 
 
-def _bucket_signals(records: List[dict]) -> Tuple[bool, float]:
+def _bucket_signals(records: list[dict]) -> tuple[bool, float]:
     """Return (textish, avg_numeric_density) for a bucket."""
     sample = records[:10]
     if not sample:
@@ -248,7 +251,7 @@ _STREAM_NAME_TO_STYPE = {
 }
 
 
-def _plans_from_dir_spec_pool(dir_spec: DirPipelineSpec, bucket_type: str) -> Optional[List[Plan]]:
+def _plans_from_dir_spec_pool(dir_spec: DirPipelineSpec, bucket_type: str) -> list[Plan] | None:
     """Convert a DirPipelineSpec candidate pool into internal Plan objects.
 
     Returns None if the spec does not define a pool for the bucket type.
@@ -257,7 +260,7 @@ def _plans_from_dir_spec_pool(dir_spec: DirPipelineSpec, bucket_type: str) -> Op
     raw = pools.get(bucket_type)
     if raw is None:
         return None
-    plans: List[Plan] = []
+    plans: list[Plan] = []
     for p in raw:
         sc = None
         if getattr(p, "stream_codecs", None):
@@ -267,7 +270,14 @@ def _plans_from_dir_spec_pool(dir_spec: DirPipelineSpec, bucket_type: str) -> Op
                 if st is None:
                     continue
                 sc[int(st)] = str(cid)
-        plans.append(Plan(layer_id=p.layer, codec_text=p.codec, stream_codecs=sc, note=getattr(p, "note", "") or ""))
+        plans.append(
+            Plan(
+                layer_id=p.layer,
+                codec_text=p.codec,
+                stream_codecs=sc,
+                note=getattr(p, "note", "") or "",
+            )
+        )
     return plans
 
 
@@ -286,10 +296,14 @@ def _shannon_entropy(data: bytes) -> float:
     return h
 
 
-def _bucket_metrics(records: List[dict], *, max_files: int = 4, max_per_file: int = 65536) -> Dict[str, float]:
+def _bucket_metrics(
+    records: list[dict], *, max_files: int = 4, max_per_file: int = 65536
+) -> dict[str, float]:
     # deterministic: prefer larger files, tie-break by rel/path
     ok = [r for r in records if r.get("path") and "error" not in r and int(r.get("size", 0)) > 0]
-    ok.sort(key=lambda r: (-int(r.get("size", 0)), str(r.get("rel", r.get("path", "")))), )
+    ok.sort(
+        key=lambda r: (-int(r.get("size", 0)), str(r.get("rel", r.get("path", "")))),
+    )
     buf = bytearray()
     digit = 0
     nul = 0
@@ -314,7 +328,14 @@ def _bucket_metrics(records: List[dict], *, max_files: int = 4, max_per_file: in
     data2 = bytes(buf)
     n = float(len(data2))
     if n <= 0:
-        return {"entropy": 0.0, "null_ratio": 0.0, "printable_ratio": 0.0, "digit_ratio": 0.0, "newline_density": 0.0, "utf8_ok": 0.0}
+        return {
+            "entropy": 0.0,
+            "null_ratio": 0.0,
+            "printable_ratio": 0.0,
+            "digit_ratio": 0.0,
+            "newline_density": 0.0,
+            "utf8_ok": 0.0,
+        }
     try:
         data2.decode("utf-8")
         utf8_ok = 1.0
@@ -330,7 +351,7 @@ def _bucket_metrics(records: List[dict], *, max_files: int = 4, max_per_file: in
     }
 
 
-def _bucket_type(records: List[dict]) -> Tuple[str, Dict[str, float]]:
+def _bucket_type(records: list[dict]) -> tuple[str, dict[str, float]]:
     """Bucket type classification (v2).
 
     Decision 1B: use entropy/null/printable/utf8 + digit ratio.
@@ -339,14 +360,18 @@ def _bucket_type(records: List[dict]) -> Tuple[str, Dict[str, float]]:
     # binary-ish if there's a non-trivial amount of NULs OR it's high-entropy and not texty
     if m.get("null_ratio", 0.0) > 0.01:
         return BT_BINARYISH, m
-    if m.get("entropy", 0.0) > 6.6 and m.get("printable_ratio", 0.0) < 0.65 and m.get("utf8_ok", 0.0) < 0.5:
+    if (
+        m.get("entropy", 0.0) > 6.6
+        and m.get("printable_ratio", 0.0) < 0.65
+        and m.get("utf8_ok", 0.0) < 0.5
+    ):
         return BT_BINARYISH, m
     if m.get("digit_ratio", 0.0) >= 0.10:
         return BT_MIXED_TEXT_NUMS, m
     return BT_TEXTISH, m
 
 
-def _plan_uses_num_v1(plan: Plan, *, resolved_sc: Optional[Dict[int, str]]) -> bool:
+def _plan_uses_num_v1(plan: Plan, *, resolved_sc: dict[int, str] | None) -> bool:
     sc = resolved_sc or {}
     if any(v == "num_v1" for v in sc.values()):
         return True
@@ -356,7 +381,9 @@ def _plan_uses_num_v1(plan: Plan, *, resolved_sc: Optional[Dict[int, str]]) -> b
     return False
 
 
-def _extract_num_stream_ints(eng: Engine, layer_id: str, data: bytes, *, want_ids: bool) -> List[int]:
+def _extract_num_stream_ints(
+    eng: Engine, layer_id: str, data: bytes, *, want_ids: bool
+) -> list[int]:
     """Extract numeric ints from a layer's raw streams.
 
     This is lossless and deterministic; used only to build bucket-level dicts.
@@ -369,7 +396,7 @@ def _extract_num_stream_ints(eng: Engine, layer_id: str, data: bytes, *, want_id
     except Exception:
         return []
 
-    ints: List[int] = []
+    ints: list[int] = []
     # Layer-specific stream layout
     if layer_id == "split_text_nums":
         if isinstance(symbols, tuple) and len(symbols) == 2:
@@ -388,11 +415,11 @@ def _extract_num_stream_ints(eng: Engine, layer_id: str, data: bytes, *, want_id
 
 def _build_bucket_num_dict(
     eng: Engine,
-    records: List[dict],
+    records: list[dict],
     plan: Plan,
     *,
     k: int,
-) -> Tuple[List[int], bytes]:
+) -> tuple[list[int], bytes]:
     """Build a deterministic top-K numeric dictionary for the bucket.
 
     Returns (dict_vals, tag8).
@@ -401,7 +428,7 @@ def _build_bucket_num_dict(
     sc = plan.stream_codecs or {}
     want_ids = bool(sc.get(ST_IDS) == "num_v1")
 
-    freq: Dict[int, int] = {}
+    freq: dict[int, int] = {}
     for r in records:
         pth = r.get("path")
         if not pth:
@@ -427,10 +454,10 @@ def _build_bucket_num_dict(
 
 
 def _build_bucket_tpl_dict(
-    records: List[dict],
+    records: list[dict],
     *,
     k: int,
-) -> Tuple[List[List[bytes]], bytes, bytes, Dict[str, Any]]:
+) -> tuple[list[list[bytes]], bytes, bytes, dict[str, Any]]:
     """Build a deterministic top-K template dictionary for the bucket.
 
     Implementation: run tpl_lines_v0.encode on each file and count template usage
@@ -438,7 +465,7 @@ def _build_bucket_tpl_dict(
 
     Returns (templates, tag8, blob, meta).
     """
-    freq: Dict[Tuple[bytes, ...], int] = {}
+    freq: dict[tuple[bytes, ...], int] = {}
     layer = LayerTplLinesV0()
 
     for r in records:
@@ -489,7 +516,7 @@ def _plan_to_dict(p: Plan) -> dict:
 
 def _plan_from_dict(d: dict) -> Plan:
     sc_in = d.get("stream_codecs")
-    sc: Optional[Dict[int, str]] = None
+    sc: dict[int, str] | None = None
     if isinstance(sc_in, dict):
         sc = {int(k): str(v) for k, v in sc_in.items()}
     return Plan(
@@ -511,10 +538,12 @@ def _load_top_db(path: Path) -> dict:
 
 def _save_top_db(path: Path, db: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(db, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(db, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
-def _bootstrap_plans(bucket_type: str, *, have_zstd: bool) -> List[Plan]:
+def _bootstrap_plans(bucket_type: str, *, have_zstd: bool) -> list[Plan]:
     """Return a small bootstrap set (<= TOP_K_DEFAULT).
 
     Used when no TOP entries exist yet for a bucket type.
@@ -527,18 +556,33 @@ def _bootstrap_plans(bucket_type: str, *, have_zstd: bool) -> List[Plan]:
     if bucket_type == BT_TEXTISH:
         # Step4 3A: textish -> split_text_nums primary, bytes fallback
         return [
-            Plan(layer_id="split_text_nums", codec_text=codec, stream_codecs={ST_TEXT: codec, ST_NUMS: "num_v1"}, note="bootstrap:split_text_nums"),
+            Plan(
+                layer_id="split_text_nums",
+                codec_text=codec,
+                stream_codecs={ST_TEXT: codec, ST_NUMS: "num_v1"},
+                note="bootstrap:split_text_nums",
+            ),
             Plan(layer_id="bytes", codec_text=codec, note="bootstrap:bytes"),
         ]
 
     # mixed_text_nums
     return [
-        Plan(layer_id="tpl_lines_shared_v0", codec_text=codec, stream_codecs={ST_TPL: codec, ST_IDS: "num_v1", ST_NUMS: "num_v1"}, note="bootstrap:tpl_lines_shared_v0"),
-        Plan(layer_id="tpl_lines_v0", codec_text=codec, stream_codecs={ST_TPL: codec, ST_IDS: "num_v1", ST_NUMS: "num_v1"}, note="bootstrap:tpl_lines_v0"),
+        Plan(
+            layer_id="tpl_lines_shared_v0",
+            codec_text=codec,
+            stream_codecs={ST_TPL: codec, ST_IDS: "num_v1", ST_NUMS: "num_v1"},
+            note="bootstrap:tpl_lines_shared_v0",
+        ),
+        Plan(
+            layer_id="tpl_lines_v0",
+            codec_text=codec,
+            stream_codecs={ST_TPL: codec, ST_IDS: "num_v1", ST_NUMS: "num_v1"},
+            note="bootstrap:tpl_lines_v0",
+        ),
     ]
 
 
-def _plan_sig(p: Plan) -> Tuple[str, str, Tuple[Tuple[int, str], ...]]:
+def _plan_sig(p: Plan) -> tuple[str, str, tuple[tuple[int, str], ...]]:
     """Signature used for dedup + diversity checks (note excluded)."""
 
     sc = tuple(sorted((p.stream_codecs or {}).items()))
@@ -561,7 +605,7 @@ def _div_rank(a: Plan, b: Plan) -> int:
     return 0
 
 
-def _pick_top_diverse(plans_sorted: List[Plan], *, top_k: int) -> List[Plan]:
+def _pick_top_diverse(plans_sorted: list[Plan], *, top_k: int) -> list[Plan]:
     if not plans_sorted:
         return []
     if top_k <= 1 or len(plans_sorted) == 1:
@@ -569,7 +613,7 @@ def _pick_top_diverse(plans_sorted: List[Plan], *, top_k: int) -> List[Plan]:
 
     first = plans_sorted[0]
     # Choose the earliest plan (best score order) that has the best diversity rank.
-    best2: Optional[Plan] = None
+    best2: Plan | None = None
     best_rank = -1
     for p in plans_sorted[1:]:
         r = _div_rank(first, p)
@@ -586,7 +630,9 @@ def _pick_top_diverse(plans_sorted: List[Plan], *, top_k: int) -> List[Plan]:
     return out[:top_k]
 
 
-def _top_candidates(db: dict, bucket_type: str, *, have_zstd: bool, top_k: int, top_db_max: int) -> List[Plan]:
+def _top_candidates(
+    db: dict, bucket_type: str, *, have_zstd: bool, top_k: int, top_db_max: int
+) -> list[Plan]:
     """Return up to top_k candidates, preferring diversity.
 
     The TOP database may store more than top_k entries; we scan the best ones
@@ -594,7 +640,7 @@ def _top_candidates(db: dict, bucket_type: str, *, have_zstd: bool, top_k: int, 
     """
 
     entries = db.get(bucket_type)
-    plans: List[Plan] = []
+    plans: list[Plan] = []
     if isinstance(entries, list):
         for e in entries[: max(1, top_db_max)]:
             if not isinstance(e, dict):
@@ -604,7 +650,7 @@ def _top_candidates(db: dict, bucket_type: str, *, have_zstd: bool, top_k: int, 
                 plans.append(_plan_from_dict(pd))
 
     # Dedup by signature, keep order (already score-sorted in DB)
-    uniq: List[Plan] = []
+    uniq: list[Plan] = []
     seen = set()
     for p in plans:
         sig = _plan_sig(p)
@@ -621,7 +667,9 @@ def _top_candidates(db: dict, bucket_type: str, *, have_zstd: bool, top_k: int, 
     return bs[:top_k]
 
 
-def _update_top_db(db: dict, bucket_type: str, plan: Plan, ratio: float, *, top_db_max: int) -> None:
+def _update_top_db(
+    db: dict, bucket_type: str, plan: Plan, ratio: float, *, top_db_max: int
+) -> None:
     """Update db in-place with the observed ratio for a plan.
 
     We keep the best (lowest) ratio observed for each plan.
@@ -651,8 +699,8 @@ def _update_top_db(db: dict, bucket_type: str, plan: Plan, ratio: float, *, top_
     db[bucket_type] = lst[: max(1, top_db_max)]
 
 
-def _candidate_plans(*, textish: bool, have_zstd: bool) -> List[Plan]:
-    plans: List[Plan] = []
+def _candidate_plans(*, textish: bool, have_zstd: bool) -> list[Plan]:
+    plans: list[Plan] = []
 
     # Always-available baselines (no external deps)
     plans.append(Plan(layer_id="bytes", codec_text="zlib", note="bytes+zlib"))
@@ -704,7 +752,7 @@ def _candidate_plans(*, textish: bool, have_zstd: bool) -> List[Plan]:
         )
 
     # De-duplicate (layer_id, codec_text, stream_codecs)
-    uniq: List[Plan] = []
+    uniq: list[Plan] = []
     seen = set()
     for p in plans:
         key = (p.layer_id, p.codec_text, tuple(sorted((p.stream_codecs or {}).items())))
@@ -715,14 +763,16 @@ def _candidate_plans(*, textish: bool, have_zstd: bool) -> List[Plan]:
     return uniq
 
 
-def _sample_records_for_autopick(records: List[dict], *, n: int) -> List[dict]:
+def _sample_records_for_autopick(records: list[dict], *, n: int) -> list[dict]:
     # prefer larger files: overhead dominates on tiny files
     ok = [r for r in records if r.get("path") and "error" not in r and int(r.get("size", 0)) > 0]
     ok.sort(key=lambda r: int(r.get("size", 0)), reverse=True)
     return ok[:n]
 
 
-def _try_plan(eng: Engine, sample: List[dict], plan: Plan, *, have_zstd: bool) -> Tuple[bool, int, int, str]:
+def _try_plan(
+    eng: Engine, sample: list[dict], plan: Plan, *, have_zstd: bool
+) -> tuple[bool, int, int, str]:
     in_total = 0
     out_total = 0
     for r in sample:
@@ -731,21 +781,23 @@ def _try_plan(eng: Engine, sample: List[dict], plan: Plan, *, have_zstd: bool) -
         in_total += len(data)
         codec_text = _resolve_codec_id(plan.codec_text, have_zstd=have_zstd)
         sc = _resolve_stream_codecs(plan.stream_codecs, have_zstd=have_zstd)
-        blob = compress_v6_mbn(eng, data, layer_id=plan.layer_id, codec_id=codec_text, stream_codecs=sc)
+        blob = compress_v6_mbn(
+            eng, data, layer_id=plan.layer_id, codec_id=codec_text, stream_codecs=sc
+        )
         out_total += len(blob)
     return True, in_total, out_total, ""
 
 
 def _choose_plan_for_bucket(
     eng: Engine,
-    records: List[dict],
+    records: list[dict],
     *,
     bucket_type: str,
     top_db: dict,
     top_k: int,
     top_db_max: int,
-    dir_spec: Optional[DirPipelineSpec] = None,
-) -> Tuple[Plan, Optional[Plan], List[Dict]]:
+    dir_spec: DirPipelineSpec | None = None,
+) -> tuple[Plan, Plan | None, list[dict]]:
     """Choose per-bucket plans (chosen + runner-up) and emit a scored report.
 
     Step 4:
@@ -777,7 +829,7 @@ def _choose_plan_for_bucket(
         return Plan(layer_id=p.layer_id, codec_text=ct, stream_codecs=sc, note=p.note)
 
     # Fallback heuristic (legacy)
-    def _heuristic() -> Tuple[Plan, Optional[Plan], List[Dict]]:
+    def _heuristic() -> tuple[Plan, Plan | None, list[dict]]:
         codec = "zstd_tight" if have_zstd else "zlib"
         # conservative default
         p = Plan(layer_id="bytes", codec_text=codec, note="heuristic:bytes")
@@ -808,16 +860,20 @@ def _choose_plan_for_bucket(
     if candidates is None:
         refresh2 = bool(refresh) if refresh is not None else _env_bool("GCC_REFRESH_TOP", False)
         if refresh2:
-            candidates = _candidate_plans(textish=(bucket_type != BT_BINARYISH), have_zstd=have_zstd)
+            candidates = _candidate_plans(
+                textish=(bucket_type != BT_BINARYISH), have_zstd=have_zstd
+            )
         else:
-            candidates = _top_candidates(top_db, bucket_type, have_zstd=have_zstd, top_k=top_k, top_db_max=top_db_max)
+            candidates = _top_candidates(
+                top_db, bucket_type, have_zstd=have_zstd, top_k=top_k, top_db_max=top_db_max
+            )
 
     sample = _sample_records_for_autopick(records, n=n)
     if not sample:
         return _heuristic()
 
-    report: List[Dict] = []
-    scored: List[Tuple[float, float, float, Plan]] = []  # (score, ratio, penalty, plan_resolved)
+    report: list[dict] = []
+    scored: list[tuple[float, float, float, Plan]] = []  # (score, ratio, penalty, plan_resolved)
 
     for p in candidates:
         p_res = _resolved_plan(p)
@@ -826,9 +882,16 @@ def _choose_plan_for_bucket(
             # Score tpl_lines_shared_v0 using a sample-derived shared dict (approximation).
             # This matches real archive-mode behaviour (bucket-level tpl_dict_v0),
             # and prevents shared-vs-selfcontained from being unfairly compared.
-            if use_archive and tpl_dict_enabled and p_res.layer_id == 'tpl_lines_shared_v0' and len(sample) >= 2:
+            if (
+                use_archive
+                and tpl_dict_enabled
+                and p_res.layer_id == "tpl_lines_shared_v0"
+                and len(sample) >= 2
+            ):
                 try:
-                    templates, tag8, _blob, _meta = _build_bucket_tpl_dict(sample, k=int(tpl_dict_k))
+                    templates, tag8, _blob, _meta = _build_bucket_tpl_dict(
+                        sample, k=int(tpl_dict_k)
+                    )
                     if templates and tag8:
                         eng2 = _engine_with_tpl_shared(eng2, templates, tag8)
                 except Exception:
@@ -839,7 +902,11 @@ def _choose_plan_for_bucket(
             if not ok or in_total <= 0:
                 raise RuntimeError(err or "try_plan failed")
             ratio = float(out_total / in_total)
-            pen = float(_cpu_penalty(p_res, resolved_codec_text=p_res.codec_text, resolved_sc=p_res.stream_codecs))
+            pen = float(
+                _cpu_penalty(
+                    p_res, resolved_codec_text=p_res.codec_text, resolved_sc=p_res.stream_codecs
+                )
+            )
             score = float(ratio + pen)
             report.append(
                 {
@@ -868,6 +935,8 @@ def _choose_plan_for_bucket(
     # Persist TOP db with observed best score
     _update_top_db(top_db, bucket_type, chosen, float(scored[0][0]), top_db_max=top_db_max)
     return chosen, runner, report
+
+
 def _relpath(root: Path, p: Path) -> str:
     return str(p.resolve().relative_to(root.resolve()))
 
@@ -877,7 +946,7 @@ def packdir(
     output_dir: Path,
     *,
     buckets: int = 16,
-    dir_spec: Optional[DirPipelineSpec] = None,
+    dir_spec: DirPipelineSpec | None = None,
     jobs: int = 1,
 ) -> None:
     input_dir = input_dir.resolve()
@@ -910,7 +979,7 @@ def packdir(
     jobs = max(1, int(jobs))
 
     # 1) Analyze + compute numeric density (sampled)
-    records: List[dict] = []
+    records: list[dict] = []
     for p in iter_files(input_dir):
         rel = _relpath(input_dir, p)
         try:
@@ -950,17 +1019,17 @@ def packdir(
     bucketed = bucketize_records(records, buckets=buckets)
 
     # group by bucket
-    by_bucket: Dict[int, List[dict]] = {}
+    by_bucket: dict[int, list[dict]] = {}
     for r in bucketed:
         b = int(r.get("bucket", 0))
         by_bucket.setdefault(b, []).append(r)
 
     # 3) Plan per bucket
-    plans: Dict[int, Plan] = {}
-    runners: Dict[int, Optional[Plan]] = {}
-    bucket_types: Dict[int, str] = {}
-    bucket_metrics: Dict[int, Dict[str, float]] = {}
-    bucket_autopick: Dict[int, List[Dict]] = {}
+    plans: dict[int, Plan] = {}
+    runners: dict[int, Plan | None] = {}
+    bucket_types: dict[int, str] = {}
+    bucket_metrics: dict[int, dict[str, float]] = {}
+    bucket_autopick: dict[int, list[dict]] = {}
     for b, recs in sorted(by_bucket.items(), key=lambda x: x[0]):
         btype, met = _bucket_type(recs)
         bucket_types[b] = btype
@@ -978,17 +1047,23 @@ def packdir(
         runners[b] = runner
         bucket_autopick[b] = rep
         # small, deterministic log
-        extra = f" runner={runner.note or (runner.layer_id + '+' + runner.codec_text)}" if runner is not None else ""
-        print(f"bucket[{b:02d}]({btype}): n={len(recs)} plan={plan.note or (plan.layer_id + '+' + plan.codec_text)}{extra}")
+        extra = (
+            f" runner={runner.note or (runner.layer_id + '+' + runner.codec_text)}"
+            if runner is not None
+            else ""
+        )
+        print(
+            f"bucket[{b:02d}]({btype}): n={len(recs)} plan={plan.note or (plan.layer_id + '+' + plan.codec_text)}{extra}"
+        )
 
     use_archive = _env_bool(ARCHIVE_ENV, ARCHIVE_DEFAULT)
     if dir_spec is not None and dir_spec.archive is not None:
         use_archive = bool(dir_spec.archive)
 
     # 3b) Bucket-level resources (numeric dict for num_v1)
-    bucket_eng: Dict[int, Engine] = {}
-    bucket_num_res: Dict[int, Dict] = {}
-    bucket_tpl_res: Dict[int, Dict] = {}
+    bucket_eng: dict[int, Engine] = {}
+    bucket_num_res: dict[int, dict] = {}
+    bucket_tpl_res: dict[int, dict] = {}
     if use_archive:
         # Resource knobs: allow dir spec overrides, fall back to env.
         nd_enabled = True
@@ -1013,7 +1088,9 @@ def packdir(
                 continue
             if len(recs) < 2:
                 continue
-            dict_vals, tag8 = _build_bucket_num_dict(eng, recs, Plan(plan.layer_id, plan.codec_text, sc, plan.note), k=k_num)
+            dict_vals, tag8 = _build_bucket_num_dict(
+                eng, recs, Plan(plan.layer_id, plan.codec_text, sc, plan.note), k=k_num
+            )
             if not dict_vals:
                 continue
             dict_raw = encode_ints(dict_vals)
@@ -1042,7 +1119,9 @@ def packdir(
                 # build only if chosen or runner uses tpl_lines_shared_v0
                 pl = plans.get(b)
                 rn = runners.get(b)
-                uses = (pl is not None and pl.layer_id == "tpl_lines_shared_v0") or (rn is not None and rn.layer_id == "tpl_lines_shared_v0")
+                uses = (pl is not None and pl.layer_id == "tpl_lines_shared_v0") or (
+                    rn is not None and rn.layer_id == "tpl_lines_shared_v0"
+                )
                 if not uses:
                     continue
                 if len(recs) < 2:
@@ -1068,15 +1147,15 @@ def packdir(
     in_total = 0
     out_total = 0
 
-    writers: Dict[int, GCAWriter] = {}
-    res_written: Dict[int, bool] = {}
+    writers: dict[int, GCAWriter] = {}
+    res_written: dict[int, bool] = {}
 
     with manifest_path.open("w", encoding="utf-8") as mf:
         # Bucket summaries (ignored by unpackdir because 'rel' is missing/empty)
         for b in sorted(by_bucket.keys()):
             chosen = plans.get(b)
             runner = runners.get(b)
-            res_meta: Dict[str, Dict] = {}
+            res_meta: dict[str, dict] = {}
             if b in bucket_num_res:
                 rr = bucket_num_res[b]
                 res_meta[NUM_DICT_NAME] = {
@@ -1101,7 +1180,8 @@ def packdir(
                         "metrics": dict(bucket_metrics.get(b, {})),
                         "chosen": _plan_to_dict(chosen) if chosen is not None else None,
                         "runner_up": _plan_to_dict(runner) if runner is not None else None,
-                        "bucket_resources": ([NUM_DICT_NAME] if b in bucket_num_res else []) + ([TPL_DICT_NAME] if b in bucket_tpl_res else []),
+                        "bucket_resources": ([NUM_DICT_NAME] if b in bucket_num_res else [])
+                        + ([TPL_DICT_NAME] if b in bucket_tpl_res else []),
                         "bucket_resources_meta": res_meta,
                     },
                     ensure_ascii=False,
@@ -1109,7 +1189,9 @@ def packdir(
                 + "\n"
             )
         # Deterministic processing order
-        bucketed_sorted = sorted(bucketed, key=lambda rr: (int(rr.get("bucket", 0)), str(rr.get("rel", ""))))
+        bucketed_sorted = sorted(
+            bucketed, key=lambda rr: (int(rr.get("bucket", 0)), str(rr.get("rel", "")))
+        )
 
         from concurrent.futures import ThreadPoolExecutor
 
@@ -1163,7 +1245,12 @@ def packdir(
                 if not rel or not src_path.exists() or not src_path.is_file() or "error" in rr:
                     # record error line and skip
                     n_fail += 1
-                    mf.write(json.dumps({"rel": rel, "error": rr.get("error", "missing")}, ensure_ascii=False) + "\n")
+                    mf.write(
+                        json.dumps(
+                            {"rel": rel, "error": rr.get("error", "missing")}, ensure_ascii=False
+                        )
+                        + "\n"
+                    )
                     continue
                 sz = int(rr.get("size") or 0)
                 if jobs > 1 and spool_threshold and sz and sz <= spool_threshold:
@@ -1176,7 +1263,10 @@ def packdir(
             # Run small jobs in parallel (deterministic write order preserved below)
             if jobs > 1 and len(small) > 1:
                 with ThreadPoolExecutor(max_workers=int(jobs)) as ex:
-                    futs = [ex.submit(_compress_one, rr, plan=plan, eng2=eng2, btype=btype) for rr in small]
+                    futs = [
+                        ex.submit(_compress_one, rr, plan=plan, eng2=eng2, btype=btype)
+                        for rr in small
+                    ]
                     for fut in futs:
                         res = fut.result()
                         results[str(res.get("rel") or "")] = res
@@ -1200,7 +1290,17 @@ def packdir(
                     continue
                 if not res.get("ok"):
                     n_fail += 1
-                    mf.write(json.dumps({"rel": rel, "bucket": int(b), "error": str(res.get("error") or "compress: unknown")}, ensure_ascii=False) + "\n")
+                    mf.write(
+                        json.dumps(
+                            {
+                                "rel": rel,
+                                "bucket": int(b),
+                                "error": str(res.get("error") or "compress: unknown"),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
                     continue
 
                 data = bytes(res["data"])
@@ -1258,7 +1358,9 @@ def packdir(
                                 "codec_text": plan.codec_text,
                                 "stream_codecs": sc,
                                 "plan_note": plan.note,
-                                "runner_up": _plan_to_dict(runners.get(b)) if runners.get(b) is not None else None,
+                                "runner_up": _plan_to_dict(runners.get(b))
+                                if runners.get(b) is not None
+                                else None,
                                 "in_size": len(data),
                                 "out_size": len(blob),
                                 "sha256": in_sha,
@@ -1283,8 +1385,11 @@ def packdir(
                         "codec_text": plan.codec_text,
                         "stream_codecs": sc,
                         "plan_note": plan.note,
-                        "runner_up": _plan_to_dict(runners.get(b)) if runners.get(b) is not None else None,
-                        "bucket_resources": ([NUM_DICT_NAME] if b in bucket_num_res else []) + ([TPL_DICT_NAME] if b in bucket_tpl_res else []),
+                        "runner_up": _plan_to_dict(runners.get(b))
+                        if runners.get(b) is not None
+                        else None,
+                        "bucket_resources": ([NUM_DICT_NAME] if b in bucket_num_res else [])
+                        + ([TPL_DICT_NAME] if b in bucket_tpl_res else []),
                         "out_rel": None if use_archive else out_rel,
                         "archive": archive_rel,
                         "archive_offset": archive_off,
@@ -1303,7 +1408,12 @@ def packdir(
                     out_total += len(blob)
                 except Exception as e:
                     n_fail += 1
-                    mf.write(json.dumps({"rel": rel, "bucket": b, "error": f"write: {e}"}, ensure_ascii=False) + "\n")
+                    mf.write(
+                        json.dumps(
+                            {"rel": rel, "bucket": b, "error": f"write: {e}"}, ensure_ascii=False
+                        )
+                        + "\n"
+                    )
 
     ratio = (out_total / in_total) if in_total else 0.0
     print(f"packdir: files_ok={n_ok} files_fail={n_fail}")
@@ -1312,7 +1422,7 @@ def packdir(
 
     # close archives (write index + trailer)
     if writers:
-        for b, w in sorted(writers.items(), key=lambda x: x[0]):
+        for _b, w in sorted(writers.items(), key=lambda x: x[0]):
             w.close()
         print(f"packdir: archives -> {output_dir} (buckets={len(writers)})")
 
@@ -1333,7 +1443,8 @@ def packdir(
                 "chosen": _plan_to_dict(chosen) if chosen is not None else None,
                 "runner_up": _plan_to_dict(runner) if runner is not None else None,
                 "candidates": bucket_autopick.get(b, []),
-                "bucket_resources": ([NUM_DICT_NAME] if b in bucket_num_res else []) + ([TPL_DICT_NAME] if b in bucket_tpl_res else []),
+                "bucket_resources": ([NUM_DICT_NAME] if b in bucket_num_res else [])
+                + ([TPL_DICT_NAME] if b in bucket_tpl_res else []),
             }
         (output_dir / "autopick_report.json").write_text(
             json.dumps(report_obj, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -1362,8 +1473,8 @@ def unpackdir(output_dir: Path, restore_dir: Path) -> None:
     n_ok = 0
     n_fail = 0
 
-    readers: Dict[str, GCAReader] = {}
-    archive_eng: Dict[str, Engine] = {}
+    readers: dict[str, GCAReader] = {}
+    archive_eng: dict[str, Engine] = {}
 
     with manifest_path.open("r", encoding="utf-8") as mf:
         for line in mf:
@@ -1404,7 +1515,11 @@ def unpackdir(output_dir: Path, restore_dir: Path) -> None:
                             tblob = bytes(res[TPL_DICT_NAME]["blob"])
                             templates, tmeta = unpack_tpl_dict_v0_resource(tblob)
                             tag8_hex = str(tmeta.get("tag8_hex", "")) or ""
-                            tag8 = bytes.fromhex(tag8_hex) if len(tag8_hex) == 16 else bytes(tmeta.get("tag8") or b"")
+                            tag8 = (
+                                bytes.fromhex(tag8_hex)
+                                if len(tag8_hex) == 16
+                                else bytes(tmeta.get("tag8") or b"")
+                            )
                             base = archive_eng.get(key, eng)
                             if templates and tag8 and len(tag8) == 8:
                                 archive_eng[key] = _engine_with_tpl_shared(base, templates, tag8)
@@ -1436,7 +1551,7 @@ def unpackdir(output_dir: Path, restore_dir: Path) -> None:
     print(f"unpackdir: restored -> {restore_dir}")
 
 
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] in ("-h", "--help"):
         print("Usage:")
         print(f"  {argv[0]} packdir <input_dir> <output_dir> [buckets]")
@@ -1447,10 +1562,14 @@ def main(argv: List[str]) -> int:
         print("  GCC_AUTOPICK=0             disable autopick (use heuristic)")
         print("  GCC_AUTOPICK_N=3           sample size per bucket (1..8)")
         print("  GCC_TOP_K=2                keep top-K pipelines per bucket type")
-        print("  GCC_TOP_DB_MAX=12          keep up to this many scored pipelines per bucket type (history)")
+        print(
+            "  GCC_TOP_DB_MAX=12          keep up to this many scored pipelines per bucket type (history)"
+        )
         print("  GCC_REFRESH_TOP=1          ignore TOP db and explore broad candidates")
         print(f"  {ARCHIVE_ENV}=0              disable per-bucket archive (.gca) output")
-        print(f"  {NUM_DICT_ENV_K}=64          bucket-level numeric dict size for num_v1 (archive only)")
+        print(
+            f"  {NUM_DICT_ENV_K}=64          bucket-level numeric dict size for num_v1 (archive only)"
+        )
         return 1
 
     cmd = argv[1]

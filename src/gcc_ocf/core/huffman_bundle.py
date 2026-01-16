@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Tuple, Optional
-
-from gcc_ocf.core.bundle import SymbolStream, EncodedStream
+from gcc_ocf.core.bundle import EncodedStream, SymbolStream
 from gcc_ocf.core.codec_huffman import CodecHuffman
 
 # -------------------------------------------------------------------
@@ -78,11 +76,11 @@ def _norm_triplet(ret) -> tuple[list[int], int, bytes]:
     return freq, int(lastbits), bitstream
 
 
-def _freq_to_used(freq: List[int]) -> List[Tuple[int, int]]:
+def _freq_to_used(freq: list[int]) -> list[tuple[int, int]]:
     return [(i, f) for i, f in enumerate(freq) if f > 0]
 
 
-def _used_to_freq(used: List[Tuple[int, int]], alphabet_size: int) -> List[int]:
+def _used_to_freq(used: list[tuple[int, int]], alphabet_size: int) -> list[int]:
     freq = [0] * alphabet_size
     for sym, f in used:
         if sym < 0 or sym >= alphabet_size:
@@ -91,7 +89,7 @@ def _used_to_freq(used: List[Tuple[int, int]], alphabet_size: int) -> List[int]:
     return freq
 
 
-def huffman_encode_stream(stream: SymbolStream, codec: Optional[CodecHuffman] = None) -> EncodedStream:
+def huffman_encode_stream(stream: SymbolStream, codec: CodecHuffman | None = None) -> EncodedStream:
     if codec is None:
         codec = CodecHuffman()
 
@@ -131,7 +129,7 @@ def huffman_encode_stream(stream: SymbolStream, codec: Optional[CodecHuffman] = 
     raise NotImplementedError(f"kind non supportato: {stream.kind}")
 
 
-def huffman_decode_stream(enc: EncodedStream, codec: Optional[CodecHuffman] = None) -> SymbolStream:
+def huffman_decode_stream(enc: EncodedStream, codec: CodecHuffman | None = None) -> SymbolStream:
     if codec is None:
         codec = CodecHuffman()
 
@@ -152,7 +150,9 @@ def huffman_decode_stream(enc: EncodedStream, codec: Optional[CodecHuffman] = No
 
     if enc.kind == "ids":
         ids = codec.decompress_ids(freq, enc.n, enc.lastbits, enc.bitstream)
-        return SymbolStream(name=enc.name, kind="ids", alphabet_size=enc.alphabet_size, n=len(ids), data=ids)
+        return SymbolStream(
+            name=enc.name, kind="ids", alphabet_size=enc.alphabet_size, n=len(ids), data=ids
+        )
 
     raise NotImplementedError(f"kind non supportato: {enc.kind}")
 
@@ -161,14 +161,15 @@ def huffman_decode_stream(enc: EncodedStream, codec: Optional[CodecHuffman] = No
 # Stream packing/unpacking V1
 # ---------------------------
 
+
 def _pack_encoded_stream_v1(enc: EncodedStream) -> bytes:
     name_b = enc.name.encode("utf-8")
     if len(name_b) > 0xFF:
         raise ValueError("stream name troppo lungo (max 255)")
 
     out = bytearray()
-    out.append(0 if enc.encoding == "raw" else 1)          # encoding flag
-    out.append(0 if enc.kind == "bytes" else 1)            # kind flag
+    out.append(0 if enc.encoding == "raw" else 1)  # encoding flag
+    out.append(0 if enc.kind == "bytes" else 1)  # kind flag
     out.append(len(name_b))
     out += name_b
     out += enc.alphabet_size.to_bytes(4, "big")
@@ -197,45 +198,60 @@ def _unpack_encoded_stream_v1(blob: bytes, idx: int) -> tuple[EncodedStream, int
     if idx + 1 + 1 + 1 + 4 + 4 > len(blob):
         raise ValueError("bundle troncato (header stream)")
 
-    enc_flag = blob[idx]; idx += 1
-    kind_flag = blob[idx]; idx += 1
-    name_len = blob[idx]; idx += 1
+    enc_flag = blob[idx]
+    idx += 1
+    kind_flag = blob[idx]
+    idx += 1
+    name_len = blob[idx]
+    idx += 1
 
     if idx + name_len > len(blob):
         raise ValueError("bundle troncato (name)")
-    name = blob[idx:idx+name_len].decode("utf-8")
+    name = blob[idx : idx + name_len].decode("utf-8")
     idx += name_len
 
-    alphabet_size = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-    n = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+    alphabet_size = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
+    n = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
 
     encoding = "raw" if enc_flag == 0 else "huffman"
     kind = "bytes" if kind_flag == 0 else "ids"
 
     if encoding == "raw":
-        raw_len = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+        raw_len = int.from_bytes(blob[idx : idx + 4], "big")
+        idx += 4
         if idx + raw_len > len(blob):
             raise ValueError("bundle troncato (raw)")
-        raw = blob[idx:idx+raw_len]; idx += raw_len
-        return EncodedStream(name=name, kind=kind, alphabet_size=alphabet_size, n=n, encoding="raw", raw=raw), idx
+        raw = blob[idx : idx + raw_len]
+        idx += raw_len
+        return EncodedStream(
+            name=name, kind=kind, alphabet_size=alphabet_size, n=n, encoding="raw", raw=raw
+        ), idx
 
-    num_used = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-    used: List[Tuple[int, int]] = []
+    num_used = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
+    used: list[tuple[int, int]] = []
     for _ in range(num_used):
         if idx + 8 > len(blob):
             raise ValueError("bundle troncato (freq entries)")
-        sym = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-        f = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+        sym = int.from_bytes(blob[idx : idx + 4], "big")
+        idx += 4
+        f = int.from_bytes(blob[idx : idx + 4], "big")
+        idx += 4
         used.append((sym, f))
 
     if idx >= len(blob):
         raise ValueError("bundle troncato (lastbits)")
-    lastbits = blob[idx]; idx += 1
+    lastbits = blob[idx]
+    idx += 1
 
-    bs_len = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+    bs_len = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
     if idx + bs_len > len(blob):
         raise ValueError("bundle troncato (bitstream)")
-    bitstream = blob[idx:idx+bs_len]; idx += bs_len
+    bitstream = blob[idx : idx + bs_len]
+    idx += bs_len
 
     return EncodedStream(
         name=name,
@@ -253,14 +269,15 @@ def _unpack_encoded_stream_v1(blob: bytes, idx: int) -> tuple[EncodedStream, int
 # Stream packing/unpacking V2
 # ---------------------------
 
+
 def _pack_encoded_stream_v2(enc: EncodedStream) -> bytes:
     name_b = enc.name.encode("utf-8")
     if len(name_b) > 0xFF:
         raise ValueError("stream name troppo lungo (max 255)")
 
     out = bytearray()
-    out.append(0 if enc.encoding == "raw" else 1)          # encoding flag
-    out.append(0 if enc.kind == "bytes" else 1)            # kind flag
+    out.append(0 if enc.encoding == "raw" else 1)  # encoding flag
+    out.append(0 if enc.kind == "bytes" else 1)  # kind flag
     out.append(len(name_b))
     out += name_b
     out += enc.alphabet_size.to_bytes(4, "big")
@@ -302,17 +319,22 @@ def _unpack_encoded_stream_v2(blob: bytes, idx: int) -> tuple[EncodedStream, int
     if idx + 1 + 1 + 1 + 4 + 4 > len(blob):
         raise ValueError("bundle troncato (header stream)")
 
-    enc_flag = blob[idx]; idx += 1
-    kind_flag = blob[idx]; idx += 1
-    name_len = blob[idx]; idx += 1
+    enc_flag = blob[idx]
+    idx += 1
+    kind_flag = blob[idx]
+    idx += 1
+    name_len = blob[idx]
+    idx += 1
 
     if idx + name_len > len(blob):
         raise ValueError("bundle troncato (name)")
-    name = blob[idx:idx+name_len].decode("utf-8")
+    name = blob[idx : idx + name_len].decode("utf-8")
     idx += name_len
 
-    alphabet_size = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-    n = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+    alphabet_size = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
+    n = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
 
     encoding = "raw" if enc_flag == 0 else "huffman"
     kind = "bytes" if kind_flag == 0 else "ids"
@@ -321,11 +343,14 @@ def _unpack_encoded_stream_v2(blob: bytes, idx: int) -> tuple[EncodedStream, int
         raw_len, idx = _dec_varint(blob, idx)
         if idx + raw_len > len(blob):
             raise ValueError("bundle troncato (raw)")
-        raw = blob[idx:idx+raw_len]; idx += raw_len
-        return EncodedStream(name=name, kind=kind, alphabet_size=alphabet_size, n=n, encoding="raw", raw=raw), idx
+        raw = blob[idx : idx + raw_len]
+        idx += raw_len
+        return EncodedStream(
+            name=name, kind=kind, alphabet_size=alphabet_size, n=n, encoding="raw", raw=raw
+        ), idx
 
     num_used, idx = _dec_varint(blob, idx)
-    used: List[Tuple[int, int]] = []
+    used: list[tuple[int, int]] = []
     sym = 0
     first = True
     for _ in range(num_used):
@@ -340,12 +365,14 @@ def _unpack_encoded_stream_v2(blob: bytes, idx: int) -> tuple[EncodedStream, int
 
     if idx >= len(blob):
         raise ValueError("bundle troncato (lastbits)")
-    lastbits = blob[idx]; idx += 1
+    lastbits = blob[idx]
+    idx += 1
 
     bs_len, idx = _dec_varint(blob, idx)
     if idx + bs_len > len(blob):
         raise ValueError("bundle troncato (bitstream)")
-    bitstream = blob[idx:idx+bs_len]; idx += bs_len
+    bitstream = blob[idx : idx + bs_len]
+    idx += bs_len
 
     return EncodedStream(
         name=name,
@@ -363,7 +390,8 @@ def _unpack_encoded_stream_v2(blob: bytes, idx: int) -> tuple[EncodedStream, int
 # Bundle packing/unpacking
 # ---------------------------
 
-def pack_huffman_bundle(encoded_streams: List[EncodedStream]) -> bytes:
+
+def pack_huffman_bundle(encoded_streams: list[EncodedStream]) -> bytes:
     """Serializza una lista di EncodedStream (multi-stream) in un payload bundle (V2)."""
     if len(encoded_streams) > 0xFF:
         raise ValueError("troppi stream (max 255)")
@@ -377,7 +405,7 @@ def pack_huffman_bundle(encoded_streams: List[EncodedStream]) -> bytes:
     return bytes(out)
 
 
-def unpack_huffman_bundle(payload: bytes) -> List[EncodedStream]:
+def unpack_huffman_bundle(payload: bytes) -> list[EncodedStream]:
     """Deserializza un payload bundle (V1 o V2) in lista di EncodedStream."""
     if len(payload) < 5:
         raise ValueError("payload troppo corto per bundle")
@@ -387,18 +415,21 @@ def unpack_huffman_bundle(payload: bytes) -> List[EncodedStream]:
         raise ValueError("payload non è un Huffman bundle")
 
     idx = 4
-    n_streams = payload[idx]; idx += 1
-    streams: List[EncodedStream] = []
+    n_streams = payload[idx]
+    idx += 1
+    streams: list[EncodedStream] = []
 
     if magic == BUNDLE_MAGIC_V1:
         # V1 lengths are u32
         for _ in range(n_streams):
             if idx + 4 > len(payload):
                 raise ValueError("bundle V1 troncato (len)")
-            L = int.from_bytes(payload[idx:idx+4], "big"); idx += 4
+            L = int.from_bytes(payload[idx : idx + 4], "big")
+            idx += 4
             if idx + L > len(payload):
                 raise ValueError("bundle V1 troncato (stream blob)")
-            s_blob = payload[idx:idx+L]; idx += L
+            s_blob = payload[idx : idx + L]
+            idx += L
             s, _ = _unpack_encoded_stream_v1(s_blob, 0)
             streams.append(s)
         return streams
@@ -408,7 +439,8 @@ def unpack_huffman_bundle(payload: bytes) -> List[EncodedStream]:
         L, idx = _dec_varint(payload, idx)
         if idx + L > len(payload):
             raise ValueError("bundle V2 troncato (stream blob)")
-        s_blob = payload[idx:idx+L]; idx += L
+        s_blob = payload[idx : idx + L]
+        idx += L
         s, _ = _unpack_encoded_stream_v2(s_blob, 0)
         streams.append(s)
 

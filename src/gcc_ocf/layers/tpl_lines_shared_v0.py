@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """tpl_lines_shared_v0
 
 Lossless layer like ``tpl_lines_v0``, with optional bucket-level shared template dictionary.
@@ -22,9 +20,11 @@ Resource (archive-only): ``tpl_dict_v0``
   tag8 = sha256(blob)[:8]
 """
 
+from __future__ import annotations
+
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from gcc_ocf.core.num_stream import decode_ints, encode_ints
 from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0, _pack_templates, _unpack_templates
@@ -45,7 +45,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     b = bytes(buf)
@@ -71,7 +71,9 @@ TPLD_MAGIC = b"TPLD"
 TPLD_VER = 1
 
 
-def pack_tpl_dict_v0_resource(templates: List[List[bytes]], *, fmt: int = 1, tok: int = 1) -> Tuple[bytes, Dict[str, Any]]:
+def pack_tpl_dict_v0_resource(
+    templates: list[list[bytes]], *, fmt: int = 1, tok: int = 1
+) -> tuple[bytes, dict[str, Any]]:
     """Pack bucket-level template dictionary resource.
 
     Returns (blob, meta).
@@ -90,7 +92,7 @@ def pack_tpl_dict_v0_resource(templates: List[List[bytes]], *, fmt: int = 1, tok
     return blob, meta
 
 
-def unpack_tpl_dict_v0_resource(blob: bytes) -> Tuple[List[List[bytes]], Dict[str, Any]]:
+def unpack_tpl_dict_v0_resource(blob: bytes) -> tuple[list[list[bytes]], dict[str, Any]]:
     b = bytes(blob)
     if len(b) < 8:
         raise ValueError("tpl_dict_v0: blob troppo corto")
@@ -126,10 +128,10 @@ class LayerTplLinesSharedV0:
     FLAG_EMPTY = 0x01
 
     def __post_init__(self) -> None:
-        self._base_templates: Optional[List[List[bytes]]] = None
-        self._base_tag8: Optional[bytes] = None
+        self._base_templates: list[list[bytes]] | None = None
+        self._base_tag8: bytes | None = None
 
-    def set_shared_dict(self, templates: List[List[bytes]], *, tag8: bytes) -> None:
+    def set_shared_dict(self, templates: list[list[bytes]], *, tag8: bytes) -> None:
         self._base_templates = [list(x) for x in templates]
         self._base_tag8 = bytes(tag8)
 
@@ -137,7 +139,7 @@ class LayerTplLinesSharedV0:
         self._base_templates = None
         self._base_tag8 = None
 
-    def pack_meta(self, meta: Dict[str, Any]) -> bytes:
+    def pack_meta(self, meta: dict[str, Any]) -> bytes:
         fmt = int(meta.get("fmt", self.FMT_VERSION)) & 0xFF
         tok = int(meta.get("tok", self.TOK_RULES)) & 0xFF
         flags = int(meta.get("flags", 0)) & 0xFF
@@ -151,7 +153,7 @@ class LayerTplLinesSharedV0:
             out += bytes(tag8)
         return bytes(out)
 
-    def unpack_meta(self, meta_bytes: bytes) -> Dict[str, Any]:
+    def unpack_meta(self, meta_bytes: bytes) -> dict[str, Any]:
         b = bytes(meta_bytes)
         if not b:
             return {}
@@ -162,7 +164,7 @@ class LayerTplLinesSharedV0:
         flags = int(b[2])
         idx = 3
         base_n, idx = _dec_varint(b, idx)
-        out: Dict[str, Any] = {"fmt": fmt, "tok": tok, "flags": flags, "base_n": int(base_n)}
+        out: dict[str, Any] = {"fmt": fmt, "tok": tok, "flags": flags, "base_n": int(base_n)}
         if base_n > 0:
             if idx + 8 > len(b):
                 raise ValueError("tpl_lines_shared_v0: meta troncata (tag8)")
@@ -174,12 +176,15 @@ class LayerTplLinesSharedV0:
             out["empty"] = True
         return out
 
-    def encode(self, data: bytes) -> Tuple[Tuple[bytes, bytes, bytes], Dict[str, Any]]:
+    def encode(self, data: bytes) -> tuple[tuple[bytes, bytes, bytes], dict[str, Any]]:
         # Reuse tpl_lines_v0 semantic tokenizer and NUMS encoding
         v0 = LayerTplLinesV0()
         (tpl_raw_full, ids_raw_full, nums_raw), meta0 = v0.encode(data)
 
-        meta: Dict[str, Any] = {"fmt": int(meta0.get("fmt", self.FMT_VERSION)), "tok": int(meta0.get("tok", self.TOK_RULES))}
+        meta: dict[str, Any] = {
+            "fmt": int(meta0.get("fmt", self.FMT_VERSION)),
+            "tok": int(meta0.get("tok", self.TOK_RULES)),
+        }
 
         if meta0.get("empty"):
             # Keep empty encoding self-contained
@@ -194,12 +199,12 @@ class LayerTplLinesSharedV0:
             return (tpl_raw_full, ids_raw_full, nums_raw), meta
 
         full_templates = _unpack_templates(tpl_raw_full)
-        base_index: Dict[Tuple[bytes, ...], int] = {tuple(t): i for i, t in enumerate(base)}
+        base_index: dict[tuple[bytes, ...], int] = {tuple(t): i for i, t in enumerate(base)}
 
         # Build delta templates, map full template id -> new global id
-        delta: List[List[bytes]] = []
-        delta_index: Dict[Tuple[bytes, ...], int] = {}
-        tid_map: Dict[int, int] = {}
+        delta: list[list[bytes]] = []
+        delta_index: dict[tuple[bytes, ...], int] = {}
+        tid_map: dict[int, int] = {}
 
         for tid, tpl in enumerate(full_templates):
             key = tuple(tpl)
@@ -224,7 +229,7 @@ class LayerTplLinesSharedV0:
         meta["base_tag8"] = bytes(base_tag8)
         return (tpl_raw, ids_raw, nums_raw), meta
 
-    def decode(self, symbols: Tuple[bytes, bytes, bytes], layer_meta: Dict[str, Any]) -> bytes:
+    def decode(self, symbols: tuple[bytes, bytes, bytes], layer_meta: dict[str, Any]) -> bytes:
         if not (isinstance(symbols, tuple) and len(symbols) == 3):
             raise ValueError("tpl_lines_shared_v0: symbols attesi: (TPL, IDS, NUMS)")
         tpl_raw, ids_raw, nums_raw = symbols
@@ -243,7 +248,9 @@ class LayerTplLinesSharedV0:
                 raise ValueError("tpl_lines_shared_v0: base dict richiesta ma non configurata")
             if len(base) != base_n:
                 raise ValueError("tpl_lines_shared_v0: base_n mismatch")
-            if not isinstance(expected_tag8, (bytes, bytearray)) or bytes(expected_tag8) != bytes(tag8):
+            if not isinstance(expected_tag8, (bytes, bytearray)) or bytes(expected_tag8) != bytes(
+                tag8
+            ):
                 raise ValueError("tpl_lines_shared_v0: tag8 mismatch")
             delta = _unpack_templates(tpl_raw)
             templates = list(base) + list(delta)
@@ -277,7 +284,9 @@ class LayerTplLinesSharedV0:
             chunks = templates[tid]
             expected = max(0, len(chunks) - 1)
             if n_nums != expected:
-                raise ValueError(f"tpl_lines_shared_v0: n_nums mismatch (got={n_nums} expected={expected})")
+                raise ValueError(
+                    f"tpl_lines_shared_v0: n_nums mismatch (got={n_nums} expected={expected})"
+                )
 
             out += chunks[0]
             for ni in range(n_nums):

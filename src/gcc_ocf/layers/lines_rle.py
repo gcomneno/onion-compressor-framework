@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
 def _enc_varint(x: int) -> bytes:
@@ -19,7 +19,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -49,14 +49,15 @@ class LayerLinesRLE:
       - n_lines (varint)
       - vocab_blob (pack_vocab_list)
     """
+
     layer_id: str = "lines_rle"
 
-    def encode(self, data: bytes) -> Tuple[bytes, Dict[str, Any]]:
-        lines: List[bytes] = data.splitlines(keepends=True)
+    def encode(self, data: bytes) -> tuple[bytes, dict[str, Any]]:
+        lines: list[bytes] = data.splitlines(keepends=True)
 
-        vocab: List[bytes] = []
-        index: Dict[bytes, int] = {}
-        ids: List[int] = []
+        vocab: list[bytes] = []
+        index: dict[bytes, int] = {}
+        ids: list[int] = []
 
         for ln in lines:
             j = index.get(ln)
@@ -85,7 +86,7 @@ class LayerLinesRLE:
         meta = {"vocab_list": vocab, "n_lines": len(lines)}
         return bytes(out), meta
 
-    def decode(self, symbols: bytes, layer_meta: Dict[str, Any]) -> bytes:
+    def decode(self, symbols: bytes, layer_meta: dict[str, Any]) -> bytes:
         vocab = layer_meta.get("vocab_list")
         n_lines = layer_meta.get("n_lines")
 
@@ -97,7 +98,7 @@ class LayerLinesRLE:
             raise TypeError("lines_rle: n_lines deve essere int >= 0")
 
         # parse RLE pairs
-        ids: List[int] = []
+        ids: list[int] = []
         idx = 0
         b = bytes(symbols)
         while idx < len(b):
@@ -117,7 +118,7 @@ class LayerLinesRLE:
             out += bytes(vocab[i])
         return bytes(out)
 
-    def pack_meta(self, layer_meta: Dict[str, Any]) -> bytes:
+    def pack_meta(self, layer_meta: dict[str, Any]) -> bytes:
         from gcc_ocf.layers.vocab_blob import pack_vocab_list
 
         vocab = layer_meta.get("vocab_list", [])
@@ -128,7 +129,7 @@ class LayerLinesRLE:
 
         return _enc_varint(n_lines) + blob
 
-    def unpack_meta(self, meta_bytes: bytes) -> Dict[str, Any]:
+    def unpack_meta(self, meta_bytes: bytes) -> dict[str, Any]:
         from gcc_ocf.layers.vocab_blob import unpack_vocab_list
 
         n_lines, idx = _dec_varint(meta_bytes, 0)

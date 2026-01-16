@@ -5,16 +5,16 @@ from pathlib import Path
 
 def test_file_roundtrip_split_text_nums_mbn(tmp_path: Path) -> None:
     """Lossless roundtrip for a real multi-stream layer (TEXT/NUMS via MBN)."""
-    from gcc_ocf.engine.container_v6 import compress_v6_mbn, decompress_v6
+    from gcc_ocf.core.mbn_bundle import ST_NUMS, ST_TEXT
     from gcc_ocf.engine.container import Engine
-    from gcc_ocf.core.mbn_bundle import ST_TEXT, ST_NUMS
+    from gcc_ocf.engine.container_v6 import compress_v6_mbn, decompress_v6
 
     data = (
-        "FATTURA 1001\n"
-        "RIGA ARTICOLO: vite M3 qty=10 prezzo=1.20\n"
-        "RIGA ARTICOLO: dado M3 qty=7 prezzo=0.80\n"
-        "TOTALE 17.60\n"
-    ).encode("utf-8")
+        b"FATTURA 1001\n"
+        b"RIGA ARTICOLO: vite M3 qty=10 prezzo=1.20\n"
+        b"RIGA ARTICOLO: dado M3 qty=7 prezzo=0.80\n"
+        b"TOTALE 17.60\n"
+    )
 
     eng = Engine.default()
     blob = compress_v6_mbn(
@@ -34,14 +34,14 @@ def test_file_roundtrip_split_text_nums_mbn(tmp_path: Path) -> None:
 
 def test_file_roundtrip_tpl_lines_shared_self_contained(tmp_path: Path) -> None:
     """tpl_lines_shared_v0 must be usable even without bucket resources."""
-    from gcc_ocf.engine.container_v6 import compress_v6_mbn, decompress_v6
+    from gcc_ocf.core.mbn_bundle import ST_IDS, ST_NUMS, ST_TPL
     from gcc_ocf.engine.container import Engine
-    from gcc_ocf.core.mbn_bundle import ST_TPL, ST_IDS, ST_NUMS
+    from gcc_ocf.engine.container_v6 import compress_v6_mbn, decompress_v6
 
     # Repetitive, line-structured text with numbers.
     lines = []
     for i in range(25):
-        lines.append(f"RIGA ARTICOLO: vite M3 qty={i+1} prezzo=1.20 TOT={(i+1)*1.2:.2f}")
+        lines.append(f"RIGA ARTICOLO: vite M3 qty={i + 1} prezzo=1.20 TOT={(i + 1) * 1.2:.2f}")
     data = ("FATTURA 2002\n" + "\n".join(lines) + "\n").encode("utf-8")
 
     eng = Engine.default()

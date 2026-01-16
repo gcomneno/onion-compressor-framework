@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
 
 from gcc_ocf.core.num_stream import decode_ints, encode_ints
 
@@ -22,7 +21,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -76,16 +75,16 @@ class CodecNumV1:
     MAGIC = b"NV1"  # 3B
 
     # optional shared dictionary (bucket-level)
-    _shared_vals: Optional[List[int]] = None
-    _shared_tag8: Optional[bytes] = None
+    _shared_vals: list[int] | None = None
+    _shared_tag8: bytes | None = None
 
     @staticmethod
-    def dict_tag8(dict_vals: List[int]) -> bytes:
+    def dict_tag8(dict_vals: list[int]) -> bytes:
         """Compute a stable 8-byte tag for a dict."""
         raw = encode_ints(list(dict_vals))
         return hashlib.sha256(raw).digest()[:8]
 
-    def set_shared_dict(self, dict_vals: List[int], tag8: bytes | None = None) -> None:
+    def set_shared_dict(self, dict_vals: list[int], tag8: bytes | None = None) -> None:
         vals = list(dict_vals)
         if not vals:
             self._shared_vals = None
@@ -100,13 +99,13 @@ class CodecNumV1:
     # Candidate K values (kept small: dictionary overhead matters on short streams)
     K_CANDIDATES = (8, 16, 32, 64, 128)
 
-    def _encode_dict(self, ints: List[int], dict_vals: List[int]) -> bytes:
+    def _encode_dict(self, ints: list[int], dict_vals: list[int]) -> bytes:
         # payload = K + dict_raw + codes
         K = len(dict_vals)
         if K <= 0:
             raise ValueError("num_v1: K deve essere > 0")
 
-        idx_map: Dict[int, int] = {v: i for i, v in enumerate(dict_vals)}
+        idx_map: dict[int, int] = {v: i for i, v in enumerate(dict_vals)}
         dict_raw = encode_ints(dict_vals)
 
         codes = bytearray()
@@ -120,9 +119,9 @@ class CodecNumV1:
 
         return _enc_varint(K) + dict_raw + bytes(codes)
 
-    def _encode_codes(self, ints: List[int], dict_vals: List[int]) -> bytes:
+    def _encode_codes(self, ints: list[int], dict_vals: list[int]) -> bytes:
         """Encode only the code-stream using the provided dict."""
-        idx_map: Dict[int, int] = {v: i for i, v in enumerate(dict_vals)}
+        idx_map: dict[int, int] = {v: i for i, v in enumerate(dict_vals)}
         codes = bytearray()
         for n in ints:
             j = idx_map.get(n)
@@ -157,7 +156,7 @@ class CodecNumV1:
                 pass
 
         # Frequency table
-        freq: Dict[int, int] = {}
+        freq: dict[int, int] = {}
         for n in ints:
             freq[n] = freq.get(n, 0) + 1
 
@@ -203,12 +202,12 @@ class CodecNumV1:
                 raise ValueError(f"num_v1: K non valido: {K}")
 
             # decode K dict ints
-            dict_vals: List[int] = []
+            dict_vals: list[int] = []
             for _ in range(int(K)):
                 u, idx = _dec_varint(payload, idx)
                 dict_vals.append(_zigzag_dec(u))
 
-            ints: List[int] = []
+            ints: list[int] = []
             # parse codes until EOF
             while idx < len(payload):
                 code, idx = _dec_varint(payload, idx)
@@ -232,7 +231,7 @@ class CodecNumV1:
             if tag8 != self._shared_tag8:
                 raise ValueError("num_v1: shared dict tag mismatch")
             dict_vals = self._shared_vals
-            ints: List[int] = []
+            ints: list[int] = []
             idx = 0
             while idx < len(codes_payload):
                 code, idx = _dec_varint(codes_payload, idx)

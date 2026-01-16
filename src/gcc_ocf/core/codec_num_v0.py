@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
 
 
 def _enc_varint(x: int) -> bytes:
@@ -19,7 +18,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -45,9 +44,9 @@ def _zigzag_dec(u: int) -> int:
     return (u >> 1) if (u & 1) == 0 else -(u >> 1) - 1
 
 
-def _decode_ints_from_raw(raw: bytes) -> List[int]:
+def _decode_ints_from_raw(raw: bytes) -> list[int]:
     # raw = concatenazione di uvarint(zigzag(int))
-    out: List[int] = []
+    out: list[int] = []
     idx = 0
     while idx < len(raw):
         u, idx = _dec_varint(raw, idx)
@@ -55,7 +54,7 @@ def _decode_ints_from_raw(raw: bytes) -> List[int]:
     return out
 
 
-def _encode_ints_to_raw(ints: List[int]) -> bytes:
+def _encode_ints_to_raw(ints: list[int]) -> bytes:
     out = bytearray()
     for n in ints:
         out += _enc_varint(_zigzag_enc(int(n)))
@@ -70,6 +69,7 @@ class CodecNumV0:
     Input/Output: bytes che rappresentano una sequenza di int come
     concatenazione di uvarint(zigzag(int)).
     """
+
     codec_id: str = "num_v0"
 
     # modes
@@ -86,7 +86,7 @@ class CodecNumV0:
         if len(ints) <= 1:
             return self.MAGIC + bytes([self.MODE_RAW]) + raw
 
-        deltas: List[int] = [ints[0]]
+        deltas: list[int] = [ints[0]]
         for i in range(1, len(ints)):
             deltas.append(ints[i] - ints[i - 1])
 
@@ -111,7 +111,7 @@ class CodecNumV0:
             if not deltas:
                 out = b""
             else:
-                ints: List[int] = [deltas[0]]
+                ints: list[int] = [deltas[0]]
                 for i in range(1, len(deltas)):
                     ints.append(ints[-1] + deltas[i])
                 out = _encode_ints_to_raw(ints)

@@ -1,7 +1,7 @@
 # GCC Onion Compressor Framework (GCC-OCF)
 > **Nota:** “GCC” qui significa *Giancarlo Compression Codec* (GiadaWare). **Non** è GNU GCC.
 
-Framework “a cipolla/lasagna” per compressione **lossless** con:
+Framework “a cipolla” per compressione **lossless** con:
 - layer semantici pluggabili (multi-stream)
 - codec pluggabili (Huffman, zlib, num_v0/num_v1, raw, …)
 - container binario v6 con payload MBN

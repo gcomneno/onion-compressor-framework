@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any
 
 # Keep in sync con gcc_huffman.py (v2)
 _VOWELS = set("aeiouAEIOU")
+
 
 @dataclass(frozen=True)
 class LayerVC0:
@@ -15,9 +16,10 @@ class LayerVC0:
       - cons: consonanti + tutto il resto
     symbols = (mask_bytes, vowels_bytes, cons_bytes)
     """
+
     id: str = "vc0"
 
-    def encode(self, data: bytes) -> Tuple[Tuple[bytes, bytes, bytes], Dict[str, Any]]:
+    def encode(self, data: bytes) -> tuple[tuple[bytes, bytes, bytes], dict[str, Any]]:
         mask = bytearray()
         vowels = bytearray()
         cons = bytearray()
@@ -36,7 +38,7 @@ class LayerVC0:
 
         return (bytes(mask), bytes(vowels), bytes(cons)), {}
 
-    def decode(self, symbols: Tuple[bytes, bytes, bytes], layer_meta: Dict[str, Any]) -> bytes:
+    def decode(self, symbols: tuple[bytes, bytes, bytes], layer_meta: dict[str, Any]) -> bytes:
         mask, vowels, cons = symbols
 
         out = bytearray()

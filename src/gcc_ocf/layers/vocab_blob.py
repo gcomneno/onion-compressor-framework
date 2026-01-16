@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List, Tuple
-
 # ------------------------------------------------------------
 # Vocab blob encoding
 #
@@ -30,7 +28,7 @@ def _enc_varint(n: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     n = 0
     shift = 0
     while True:
@@ -46,7 +44,7 @@ def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
             raise ValueError("varint: overflow")
 
 
-def pack_vocab_list(vocab_list: List[bytes]) -> bytes:
+def pack_vocab_list(vocab_list: list[bytes]) -> bytes:
     # VB2 format
     out = bytearray()
     out += MAGIC_VB2
@@ -60,7 +58,7 @@ def pack_vocab_list(vocab_list: List[bytes]) -> bytes:
     return bytes(out)
 
 
-def unpack_vocab_list(blob: bytes) -> List[bytes]:
+def unpack_vocab_list(blob: bytes) -> list[bytes]:
     if not isinstance(blob, (bytes, bytearray)):
         raise TypeError("blob deve essere bytes")
 
@@ -70,12 +68,12 @@ def unpack_vocab_list(blob: bytes) -> List[bytes]:
     if len(buf) >= 4 and buf[:4] == MAGIC_VB2:
         idx = 4
         n, idx = _dec_varint(buf, idx)
-        vocab: List[bytes] = []
+        vocab: list[bytes] = []
         for _ in range(n):
             L, idx = _dec_varint(buf, idx)
             if idx + L > len(buf):
                 raise ValueError("vocab VB2 troncato (data)")
-            vocab.append(buf[idx:idx+L])
+            vocab.append(buf[idx : idx + L])
             idx += L
         if idx != len(buf):
             raise ValueError("vocab VB2 con trailing garbage")
@@ -85,18 +83,18 @@ def unpack_vocab_list(blob: bytes) -> List[bytes]:
     idx = 0
     if len(buf) < 4:
         raise ValueError("vocab v1 troppo corto")
-    n = int.from_bytes(buf[idx:idx+4], "big")
+    n = int.from_bytes(buf[idx : idx + 4], "big")
     idx += 4
 
-    vocab: List[bytes] = []
+    vocab: list[bytes] = []
     for _ in range(n):
         if idx + 4 > len(buf):
             raise ValueError("vocab v1 troncato (len)")
-        L = int.from_bytes(buf[idx:idx+4], "big")
+        L = int.from_bytes(buf[idx : idx + 4], "big")
         idx += 4
         if idx + L > len(buf):
             raise ValueError("vocab v1 troncato (data)")
-        vocab.append(buf[idx:idx+L])
+        vocab.append(buf[idx : idx + L])
         idx += L
 
     if idx != len(buf):

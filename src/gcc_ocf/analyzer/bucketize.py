@@ -3,11 +3,11 @@ from __future__ import annotations
 import importlib
 import json
 import os
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
-from gcc_ocf.analyzer.simhash import Fingerprint, fingerprint_bytes
+from gcc_ocf.analyzer.simhash import fingerprint_bytes
 
 
 def iter_files(root: Path) -> Iterator[Path]:
@@ -44,7 +44,7 @@ def _fallback_bucket(simhash64: int, buckets: int) -> int:
     return int(simhash64) % int(buckets)
 
 
-def _load_tb_plugin() -> Optional[object]:
+def _load_tb_plugin() -> object | None:
     modname = os.environ.get("TB_MODULE")
     if not modname:
         return None
@@ -54,9 +54,9 @@ def _load_tb_plugin() -> Optional[object]:
         return None
 
 
-def bucketize_records(records: List[dict], *, buckets: int) -> List[dict]:
+def bucketize_records(records: list[dict], *, buckets: int) -> list[dict]:
     plugin = _load_tb_plugin()
-    out: List[dict] = []
+    out: list[dict] = []
     for r in records:
         if "simhash64" not in r:
             continue
@@ -76,7 +76,7 @@ def bucketize_records(records: List[dict], *, buckets: int) -> List[dict]:
 
 
 def bucket_dir(report_jsonl: Path, *, buckets: int, out_jsonl: Path) -> None:
-    records: List[dict] = []
+    records: list[dict] = []
     with report_jsonl.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()

@@ -8,55 +8,49 @@ Core: Huffman su byte, riusato da:
 - Step 3: token "sillabe" + blocchi non-lettera, Huffman sugli ID dei token (v3)
 - Step 4: token "parole intere" + blocchi non-lettera, Huffman sugli ID dei token (v4)
 """
+
 from __future__ import annotations
-
-from typing import Dict, List, Tuple
-from pathlib import Path
-
-from gcc_ocf.core.codec_huffman import CodecHuffman
-from gcc_ocf.core.bundle import SymbolStream, EncodedStream
-from gcc_ocf.core.codec_huffman import (
-    huffman_compress_core,
-    huffman_decompress_core,
-    huffman_compress_ids,
-    huffman_decompress_ids,
-)
-
-from gcc_ocf.layers.bytes import LayerBytes
-from gcc_ocf.layers.vc0 import LayerVC0
-from gcc_ocf.layers.syllables_it import LayerSyllablesIT
-from gcc_ocf.layers.words_it import LayerWordsIT
-
-from gcc_ocf.engine.container import Engine
-from gcc_ocf.engine.container_v6 import (
-    compress_v6,
-    decompress_v6,
-    compress_v6_mbn,
-    pack_container_v6,
-    CODEC_TO_CODE,
-    unpack_v6_mbn_raw,
-)
-
-from gcc_ocf.core.mbn_bundle import (
-    pack_mbn,
-    MBNStream,
-    ST_MAIN,
-    ST_MASK,
-    ST_VOWELS,
-    ST_CONS,
-    ST_TEXT,
-    ST_NUMS,
-    ST_TPL,
-    ST_IDS,
-    ST_META,
-)
-
-from gcc_ocf.core.num_stream import encode_ints, decode_ints
 
 import json
 import re
-
 import sys
+from pathlib import Path
+
+from gcc_ocf.core.bundle import EncodedStream, SymbolStream
+from gcc_ocf.core.codec_huffman import (
+    CodecHuffman,
+    huffman_compress_core,
+    huffman_compress_ids,
+    huffman_decompress_core,
+    huffman_decompress_ids,
+)
+from gcc_ocf.core.mbn_bundle import (
+    ST_CONS,
+    ST_IDS,
+    ST_MAIN,
+    ST_MASK,
+    ST_META,
+    ST_NUMS,
+    ST_TEXT,
+    ST_TPL,
+    ST_VOWELS,
+    MBNStream,
+    pack_mbn,
+)
+from gcc_ocf.core.num_stream import decode_ints, encode_ints
+from gcc_ocf.engine.container import Engine
+from gcc_ocf.engine.container_v6 import (
+    CODEC_TO_CODE,
+    compress_v6,
+    compress_v6_mbn,
+    decompress_v6,
+    pack_container_v6,
+    unpack_v6_mbn_raw,
+)
+from gcc_ocf.layers.bytes import LayerBytes
+from gcc_ocf.layers.syllables_it import LayerSyllablesIT
+from gcc_ocf.layers.vc0 import LayerVC0
+from gcc_ocf.layers.words_it import LayerWordsIT
 
 MAGIC = b"GCC"
 BUNDLE_MAGIC = b"HBN1"  # Huffman Bundle v1
@@ -66,6 +60,7 @@ VERSION_STEP2 = 2  # maschera + vocali + resto
 VERSION_STEP3 = 3  # sillabe
 VERSION_STEP4 = 4  # parole intere
 VERSION_STEP5 = 5  # (concettuale) – lemmi + tag morfologici (“vocabolario mentale”)
+
 
 # -------------------
 # Step 1: formato v1 (un solo stream)
@@ -90,10 +85,10 @@ def compress_bytes_v1(data: bytes) -> bytes:
     if N == 0:
         header = bytearray()
         header += MAGIC
-        header.append(VERSION_STEP1)          # di solito = 1
-        header += (0).to_bytes(8, "big")      # N = 0
-        header += (0).to_bytes(2, "big")      # NUM_SYMS = 0
-        header.append(0)                      # LASTBITS = 0
+        header.append(VERSION_STEP1)  # di solito = 1
+        header += (0).to_bytes(8, "big")  # N = 0
+        header += (0).to_bytes(2, "big")  # NUM_SYMS = 0
+        header.append(0)  # LASTBITS = 0
         # nessun bitstream
         return bytes(header)
 
@@ -110,12 +105,13 @@ def compress_bytes_v1(data: bytes) -> bytes:
     header += num_syms.to_bytes(2, "big")
 
     for sym, f in used:
-        header.append(sym)                 # SYMBOL (u8)
-        header += f.to_bytes(4, "big")     # FREQ (u32)
+        header.append(sym)  # SYMBOL (u8)
+        header += f.to_bytes(4, "big")  # FREQ (u32)
 
     header.append(lastbits)
 
     return bytes(header) + bitstream
+
 
 def decompress_bytes_v1(comp: bytes) -> bytes:
     """
@@ -132,7 +128,7 @@ def decompress_bytes_v1(comp: bytes) -> bytes:
     if len(comp) < min_header:
         raise ValueError("Dati troppo corti per GCC v1 (header minimale)")
 
-    magic = comp[idx:idx+3]
+    magic = comp[idx : idx + 3]
     idx += 3
     if magic != MAGIC:
         raise ValueError("Magic number non valido")
@@ -141,9 +137,9 @@ def decompress_bytes_v1(comp: bytes) -> bytes:
     if version != VERSION_STEP1:
         raise ValueError(f"Versione Step1 inattesa: {version}")
 
-    N = int.from_bytes(comp[idx:idx+8], "big")
+    N = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
-    num_syms = int.from_bytes(comp[idx:idx+2], "big")
+    num_syms = int.from_bytes(comp[idx : idx + 2], "big")
     idx += 2
 
     freq = [0] * 256
@@ -152,7 +148,7 @@ def decompress_bytes_v1(comp: bytes) -> bytes:
             raise ValueError("File troncato: freq table incompleta")
         sym = comp[idx]
         idx += 1
-        f = int.from_bytes(comp[idx:idx+4], "big")
+        f = int.from_bytes(comp[idx : idx + 4], "big")
         idx += 4
         freq[sym] = f
 
@@ -170,19 +166,23 @@ def decompress_bytes_v1(comp: bytes) -> bytes:
     layer = LayerBytes()
     return layer.decode(symbols, {})
 
+
 # -------------------
 # Step 2: formato v2 (maschera + vocali + resto)
 # -------------------
 VOWELS = set("aeiouAEIOU")
 
-def split_streams_v2(data: bytes) -> Tuple[bytes, bytes, bytes]:
+
+def split_streams_v2(data: bytes) -> tuple[bytes, bytes, bytes]:
     layer = LayerVC0()
     (mask, vowels, cons), _meta = layer.encode(data)
     return mask, vowels, cons
 
+
 def merge_streams_v2(mask: bytes, vowels: bytes, cons: bytes) -> bytes:
     layer = LayerVC0()
     return layer.decode((mask, vowels, cons), {})
+
 
 def compress_bytes_v2(data: bytes) -> bytes:
     """
@@ -208,7 +208,7 @@ def compress_bytes_v2(data: bytes) -> bytes:
 
     # lunghezze dei flussi originali
     header += len(vowels).to_bytes(8, "big")  # LEN_V
-    header += len(cons).to_bytes(8, "big")    # LEN_C
+    header += len(cons).to_bytes(8, "big")  # LEN_C
     # mask length = N, lo sappiamo già
 
     # FREQ + lastbits + dimensioni bitstream per ciascun flusso
@@ -232,17 +232,18 @@ def compress_bytes_v2(data: bytes) -> bytes:
 
     return bytes(header) + bs_m + bs_v + bs_c
 
+
 def decompress_bytes_v2(comp: bytes) -> bytes:
     """
     Decodifica formato v2 (Step 2).
     """
     # Controllo minimo: almeno header base
-    min_header_base = 3 + 1 + 8 + 8 + 8   # MAGIC+VER+N+LEN_V+LEN_C
+    min_header_base = 3 + 1 + 8 + 8 + 8  # MAGIC+VER+N+LEN_V+LEN_C
     if len(comp) < min_header_base:
         raise ValueError("Dati troppo corti per GCC v2 (base header)")
 
     idx = 0
-    magic = comp[idx:idx+3]
+    magic = comp[idx : idx + 3]
     idx += 3
     if magic != MAGIC:
         raise ValueError("Magic non valido")
@@ -251,45 +252,45 @@ def decompress_bytes_v2(comp: bytes) -> bytes:
     if version != VERSION_STEP2:
         raise ValueError(f"Versione v2 richiesta, trovato {version}")
 
-    N = int.from_bytes(comp[idx:idx+8], "big")
+    N = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
-    len_v = int.from_bytes(comp[idx:idx+8], "big")
+    len_v = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
-    len_c = int.from_bytes(comp[idx:idx+8], "big")
+    len_c = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
     # mask length = N
 
     # MASK: freq + lastbits + bsize
     freq_m = []
     for _ in range(256):
-        f = int.from_bytes(comp[idx:idx+4], "big")
+        f = int.from_bytes(comp[idx : idx + 4], "big")
         idx += 4
         freq_m.append(f)
     last_m = comp[idx]
     idx += 1
-    bsize_m = int.from_bytes(comp[idx:idx+8], "big")
+    bsize_m = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
 
     # VOWELS
     freq_v = []
     for _ in range(256):
-        f = int.from_bytes(comp[idx:idx+4], "big")
+        f = int.from_bytes(comp[idx : idx + 4], "big")
         idx += 4
         freq_v.append(f)
     last_v = comp[idx]
     idx += 1
-    bsize_v = int.from_bytes(comp[idx:idx+8], "big")
+    bsize_v = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
 
     # CONS
     freq_c = []
     for _ in range(256):
-        f = int.from_bytes(comp[idx:idx+4], "big")
+        f = int.from_bytes(comp[idx : idx + 4], "big")
         idx += 4
         freq_c.append(f)
     last_c = comp[idx]
     idx += 1
-    bsize_c = int.from_bytes(comp[idx:idx+8], "big")
+    bsize_c = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
 
     # Bitstream per i tre flussi
@@ -312,25 +313,29 @@ def decompress_bytes_v2(comp: bytes) -> bytes:
     # Ricostruisci il testo
     return merge_streams_v2(mask, vowels, cons)
 
+
 # -------------------
 # Step 3: formato v3 (sillabe + blocchi non-lettera)
 # -------------------
 def _is_ascii_letter(b: int) -> bool:
     return (65 <= b <= 90) or (97 <= b <= 122)  # A-Z a-z
 
+
 _VOWEL_BYTES = {ord(c) for c in "aeiouAEIOU"}
+
 
 def _is_vowel_byte(b: int) -> bool:
     return b in _VOWEL_BYTES
 
-def split_word_into_syllables(word: bytes) -> List[bytes]:
+
+def split_word_into_syllables(word: bytes) -> list[bytes]:
     """
     Spezzettamento grezzo di una "parola" (solo lettere) in pseudo-sillabe:
     - accumula caratteri
     - spezza dopo ogni vocale
     Non è foneticamente perfetto, ma basta per sperimentare.
     """
-    syllables: List[bytes] = []
+    syllables: list[bytes] = []
     current = bytearray()
     for b in word:
         current.append(b)
@@ -341,13 +346,14 @@ def split_word_into_syllables(word: bytes) -> List[bytes]:
         syllables.append(bytes(current))
     return syllables
 
-def tokenize_syllables_and_other(data: bytes) -> List[bytes]:
+
+def tokenize_syllables_and_other(data: bytes) -> list[bytes]:
     """
     Trasforma il testo in una lista di token:
     - sequenze di lettere -> spezzate in pseudo-sillabe
     - sequenze di non-lettere -> tenute come blocchi separati
     """
-    tokens: List[bytes] = []
+    tokens: list[bytes] = []
     i = 0
     n = len(data)
 
@@ -370,6 +376,7 @@ def tokenize_syllables_and_other(data: bytes) -> List[bytes]:
                 i += 1
             tokens.append(data[start:i])
     return tokens
+
 
 def compress_bytes_v3(data: bytes) -> bytes:
     """
@@ -423,6 +430,7 @@ def compress_bytes_v3(data: bytes) -> bytes:
 
     return bytes(header) + bitstream
 
+
 def decompress_bytes_v3(comp: bytes) -> bytes:
     """
     Decodifica formato v3 (Step 3: sillabe) con VOCAB_SIZE variabile.
@@ -433,7 +441,7 @@ def decompress_bytes_v3(comp: bytes) -> bytes:
     if len(comp) < min_header_base:
         raise ValueError("Dati troppo corti per GCC v3 (base header)")
 
-    magic = comp[idx:idx+3]
+    magic = comp[idx : idx + 3]
     idx += 3
     if magic != MAGIC:
         raise ValueError("Magic non valido")
@@ -443,22 +451,22 @@ def decompress_bytes_v3(comp: bytes) -> bytes:
     if version != VERSION_STEP3:
         raise ValueError(f"Versione v3 richiesta, trovato {version}")
 
-    N_tokens = int.from_bytes(comp[idx:idx+8], "big")
+    N_tokens = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
 
-    vocab_size = int.from_bytes(comp[idx:idx+4], "big")
+    vocab_size = int.from_bytes(comp[idx : idx + 4], "big")
     idx += 4
 
     # VOCAB
-    vocab_list: List[bytes] = []
+    vocab_list: list[bytes] = []
     for _ in range(vocab_size):
         if idx + 2 > len(comp):
             raise ValueError("File troncato (LEN token)")
-        L = int.from_bytes(comp[idx:idx+2], "big")
+        L = int.from_bytes(comp[idx : idx + 2], "big")
         idx += 2
         if idx + L > len(comp):
             raise ValueError("File troncato (TOKEN)")
-        tok = comp[idx:idx+L]
+        tok = comp[idx : idx + L]
         idx += L
         vocab_list.append(tok)
 
@@ -467,9 +475,9 @@ def decompress_bytes_v3(comp: bytes) -> bytes:
     if idx + freq_bytes + 1 > len(comp):
         raise ValueError("File troncato (FREQ_ID o LASTBITS)")
 
-    freq: List[int] = []
+    freq: list[int] = []
     for _ in range(vocab_size):
-        f = int.from_bytes(comp[idx:idx+4], "big")
+        f = int.from_bytes(comp[idx : idx + 4], "big")
         idx += 4
         freq.append(f)
 
@@ -486,6 +494,7 @@ def decompress_bytes_v3(comp: bytes) -> bytes:
     # Ricostruisci il testo concatenando i token
     layer = LayerSyllablesIT()
     return layer.decode(ids, {"vocab_list": vocab_list})
+
 
 def compress_bytes_v4(data: bytes) -> bytes:
     """
@@ -518,9 +527,9 @@ def compress_bytes_v4(data: bytes) -> bytes:
         header = bytearray()
         header += MAGIC
         header.append(VERSION_STEP4)
-        header += (0).to_bytes(8, "big")   # N_TOKENS
-        header += (0).to_bytes(4, "big")   # VOCAB_SIZE
-        header.append(0)                   # LASTBITS
+        header += (0).to_bytes(8, "big")  # N_TOKENS
+        header += (0).to_bytes(4, "big")  # VOCAB_SIZE
+        header.append(0)  # LASTBITS
         return bytes(header)
 
     # Header
@@ -549,6 +558,7 @@ def compress_bytes_v4(data: bytes) -> bytes:
 
     return bytes(header) + bitstream
 
+
 def decompress_bytes_v4(comp: bytes) -> bytes:
     """
     Decodifica formato v4 (Step 4: parole intere + blocchi non-lettera) con VOCAB_SIZE variabile.
@@ -559,7 +569,7 @@ def decompress_bytes_v4(comp: bytes) -> bytes:
     if len(comp) < min_header_base:
         raise ValueError("Dati troppo corti per GCC v4 (base header)")
 
-    magic = comp[idx:idx+3]
+    magic = comp[idx : idx + 3]
     idx += 3
     if magic != MAGIC:
         raise ValueError("Magic non valido")
@@ -569,22 +579,22 @@ def decompress_bytes_v4(comp: bytes) -> bytes:
     if version != VERSION_STEP4:
         raise ValueError(f"Versione v4 richiesta, trovato {version}")
 
-    N_tokens = int.from_bytes(comp[idx:idx+8], "big")
+    N_tokens = int.from_bytes(comp[idx : idx + 8], "big")
     idx += 8
 
-    vocab_size = int.from_bytes(comp[idx:idx+4], "big")
+    vocab_size = int.from_bytes(comp[idx : idx + 4], "big")
     idx += 4
 
     # VOCAB
-    vocab_list: List[bytes] = []
+    vocab_list: list[bytes] = []
     for _ in range(vocab_size):
         if idx + 2 > len(comp):
             raise ValueError("File troncato (LEN token)")
-        L = int.from_bytes(comp[idx:idx+2], "big")
+        L = int.from_bytes(comp[idx : idx + 2], "big")
         idx += 2
         if idx + L > len(comp):
             raise ValueError("File troncato (TOKEN)")
-        tok = comp[idx:idx+L]
+        tok = comp[idx : idx + L]
         idx += L
         vocab_list.append(tok)
 
@@ -593,9 +603,9 @@ def decompress_bytes_v4(comp: bytes) -> bytes:
     if idx + freq_bytes + 1 > len(comp):
         raise ValueError("File troncato (FREQ_ID o LASTBITS)")
 
-    freq: List[int] = []
+    freq: list[int] = []
     for _ in range(vocab_size):
-        f = int.from_bytes(comp[idx:idx+4], "big")
+        f = int.from_bytes(comp[idx : idx + 4], "big")
         idx += 4
         freq.append(f)
 
@@ -612,12 +622,15 @@ def decompress_bytes_v4(comp: bytes) -> bytes:
     layer = LayerWordsIT()
     return layer.decode(ids, {"vocab_list": vocab_list})
 
+
 def _parse_csv(value: str) -> list[str]:
     parts = [p.strip() for p in value.split(",")]
     return [p for p in parts if p]
 
 
-def compress_file_v5(input_path: str, output_path: str, layer_id: str = "bytes", codec_id: str = "huffman") -> None:
+def compress_file_v5(
+    input_path: str, output_path: str, layer_id: str = "bytes", codec_id: str = "huffman"
+) -> None:
     """
     v5 compress.
 
@@ -641,9 +654,13 @@ def compress_file_v5(input_path: str, output_path: str, layer_id: str = "bytes",
     bad_codecs = [x for x in codec_candidates if x not in known_codecs]
 
     if bad_layers:
-        raise SystemExit(f"[ERR] layer_id non valido: {bad_layers} (validi: {', '.join(sorted(known_layers))})")
+        raise SystemExit(
+            f"[ERR] layer_id non valido: {bad_layers} (validi: {', '.join(sorted(known_layers))})"
+        )
     if bad_codecs:
-        raise SystemExit(f"[ERR] codec_id non valido: {bad_codecs} (validi: {', '.join(sorted(known_codecs))})")
+        raise SystemExit(
+            f"[ERR] codec_id non valido: {bad_codecs} (validi: {', '.join(sorted(known_codecs))})"
+        )
 
     best_blob: bytes | None = None
     best_layer: str | None = None
@@ -665,9 +682,11 @@ def compress_file_v5(input_path: str, output_path: str, layer_id: str = "bytes",
     orig_n = len(data)
     comp_n = len(best_blob)
     ratio = (comp_n / orig_n) if orig_n else 0.0
-    print(f"=== GCC Container v5 ===")
+    print("=== GCC Container v5 ===")
     if len(layer_candidates) > 1 or len(codec_candidates) > 1:
-        print(f"Candidates     : layers={','.join(layer_candidates)}  codecs={','.join(codec_candidates)}")
+        print(
+            f"Candidates     : layers={','.join(layer_candidates)}  codecs={','.join(codec_candidates)}"
+        )
     print(f"Layer/Codec    : {best_layer} / {best_codec}")
     print(f"File originale : {input_path} ({orig_n} byte)")
     print(f"File compresso : {output_path} ({comp_n} byte)")
@@ -682,50 +701,60 @@ def decompress_file_v5(input_path: str, output_path: str) -> None:
     Path(output_path).write_bytes(data)
     print(f"Decompressione v5 completata: {output_path}")
 
+
 def compress_file_v1(input_path: str | Path, output_path: str | Path) -> None:
     data = Path(input_path).read_bytes()
     comp = compress_bytes_v1(data)
     Path(output_path).write_bytes(comp)
+
 
 def decompress_file_v1(input_path: str | Path, output_path: str | Path) -> None:
     comp = Path(input_path).read_bytes()
     data = decompress_bytes_v1(comp)
     Path(output_path).write_bytes(data)
 
+
 def compress_file_v2(input_path: str | Path, output_path: str | Path) -> None:
     data = Path(input_path).read_bytes()
     comp = compress_bytes_v2(data)
     Path(output_path).write_bytes(comp)
+
 
 def decompress_file_v2(input_path: str | Path, output_path: str | Path) -> None:
     comp = Path(input_path).read_bytes()
     data = decompress_bytes_v2(comp)
     Path(output_path).write_bytes(data)
 
+
 def compress_file_v3(input_path: str | Path, output_path: str | Path) -> None:
     data = Path(input_path).read_bytes()
     comp = compress_bytes_v3(data)
     Path(output_path).write_bytes(comp)
+
 
 def decompress_file_v3(input_path: str | Path, output_path: str | Path) -> None:
     comp = Path(input_path).read_bytes()
     data = decompress_bytes_v3(comp)
     Path(output_path).write_bytes(data)
 
+
 def compress_file_v4(input_path: str | Path, output_path: str | Path) -> None:
     data = Path(input_path).read_bytes()
     comp = compress_bytes_v4(data)
     Path(output_path).write_bytes(comp)
+
 
 def decompress_file_v4(input_path: str | Path, output_path: str | Path) -> None:
     comp = Path(input_path).read_bytes()
     data = decompress_bytes_v4(comp)
     Path(output_path).write_bytes(data)
 
-def _freq_to_used(freq: List[int]) -> List[tuple[int, int]]:
+
+def _freq_to_used(freq: list[int]) -> list[tuple[int, int]]:
     return [(i, f) for i, f in enumerate(freq) if f > 0]
 
-def _used_to_freq(used: List[tuple[int, int]], alphabet_size: int) -> List[int]:
+
+def _used_to_freq(used: list[tuple[int, int]], alphabet_size: int) -> list[int]:
     freq = [0] * alphabet_size
     for sym, f in used:
         if sym < 0 or sym >= alphabet_size:
@@ -733,11 +762,16 @@ def _used_to_freq(used: List[tuple[int, int]], alphabet_size: int) -> List[int]:
         freq[sym] = f
     return freq
 
+
 def _split_csv(s: str) -> list[str]:
     return [x.strip() for x in (s or "").split(",") if x.strip()]
 
-def compress_file_v6(input_path: str, output_path: str, layer_id: str = "bytes", codec_id: str = "huffman") -> None:
+
+def compress_file_v6(
+    input_path: str, output_path: str, layer_id: str = "bytes", codec_id: str = "huffman"
+) -> None:
     from pathlib import Path
+
     from gcc_ocf.engine.container import Engine
 
     data = Path(input_path).read_bytes()
@@ -751,7 +785,7 @@ def compress_file_v6(input_path: str, output_path: str, layer_id: str = "bytes",
     best_codec = None
 
     if len(layers) > 1 or len(codecs) > 1:
-        print(f"=== GCC Container v6 ===")
+        print("=== GCC Container v6 ===")
         print(f"Candidates     : layers={','.join(layers)}  codecs={','.join(codecs)}")
 
     for lid in layers:
@@ -777,8 +811,10 @@ def compress_file_v6(input_path: str, output_path: str, layer_id: str = "bytes",
     print(f"Rapporto       : {ratio:.3f} (1.0 = nessuna compressione)")
     print("========================")
 
+
 def decompress_file_v6(input_path: str, output_path: str) -> None:
     from pathlib import Path
+
     from gcc_ocf.engine.container import Engine
 
     blob = Path(input_path).read_bytes()
@@ -829,7 +865,14 @@ def _parse_stream_codecs_spec(spec: str | None) -> dict[int, str] | None:
         out[code] = v
     return out
 
-def compress_file_v7(input_path: str, output_path: str, layer_id: str = "bytes", codec_id: str = "zstd_tight", stream_codecs_spec: str | None = None) -> None:
+
+def compress_file_v7(
+    input_path: str,
+    output_path: str,
+    layer_id: str = "bytes",
+    codec_id: str = "zstd_tight",
+    stream_codecs_spec: str | None = None,
+) -> None:
     """c7: v6 + payload MBN (multi-stream).
 
     Layer supportati (attuali):
@@ -861,7 +904,9 @@ def compress_file_v7(input_path: str, output_path: str, layer_id: str = "bytes",
             ST_NUMS: "num_v1",
         }
     # Nota: ST_META (se presente) viene sempre forzato a 'raw' nel container.
-    blob = compress_v6_mbn(eng, data, layer_id=layer_id, codec_id=codec_id, stream_codecs=stream_codecs)
+    blob = compress_v6_mbn(
+        eng, data, layer_id=layer_id, codec_id=codec_id, stream_codecs=stream_codecs
+    )
     Path(output_path).write_bytes(blob)
 
     in_size = len(data)
@@ -971,7 +1016,13 @@ def extract_show(input_path: str) -> None:
             nums = decode_ints(raw)
 
     print("=== EXTRACT-SHOW ===")
-    print(json.dumps({"meta": meta, "nums": nums[:200], "nums_total": len(nums)}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {"meta": meta, "nums": nums[:200], "nums_total": len(nums)},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 def huffman_encode_stream(stream: SymbolStream) -> EncodedStream:
@@ -989,7 +1040,7 @@ def huffman_encode_stream(stream: SymbolStream) -> EncodedStream:
         )
 
     if stream.kind == "ids":
-        ids: List[int] = stream.data  # type: ignore[assignment]
+        ids: list[int] = stream.data  # type: ignore[assignment]
         vocab_size = stream.alphabet_size
         freq, lastbits, bitstream = huffman_compress_ids(ids, vocab_size)
         return EncodedStream(
@@ -1005,13 +1056,16 @@ def huffman_encode_stream(stream: SymbolStream) -> EncodedStream:
 
     raise NotImplementedError("kind non supportato")
 
+
 def huffman_decode_stream(enc: EncodedStream) -> SymbolStream:
     if enc.encoding == "raw":
         if enc.raw is None:
             raise ValueError("EncodedStream raw senza raw bytes")
         if enc.kind != "bytes":
             raise ValueError("raw supportato solo per bytes (per ora)")
-        return SymbolStream(name=enc.name, kind="bytes", alphabet_size=256, n=len(enc.raw), data=enc.raw)
+        return SymbolStream(
+            name=enc.name, kind="bytes", alphabet_size=256, n=len(enc.raw), data=enc.raw
+        )
 
     # huffman
     if enc.freq_used is None or enc.lastbits is None or enc.bitstream is None:
@@ -1025,9 +1079,12 @@ def huffman_decode_stream(enc: EncodedStream) -> SymbolStream:
 
     if enc.kind == "ids":
         ids = huffman_decompress_ids(freq, enc.n, enc.lastbits, enc.bitstream)
-        return SymbolStream(name=enc.name, kind="ids", alphabet_size=enc.alphabet_size, n=len(ids), data=ids)
+        return SymbolStream(
+            name=enc.name, kind="ids", alphabet_size=enc.alphabet_size, n=len(ids), data=ids
+        )
 
     raise NotImplementedError("kind non supportato")
+
 
 def pack_encoded_stream(enc: EncodedStream) -> bytes:
     name_b = enc.name.encode("utf-8")
@@ -1035,8 +1092,8 @@ def pack_encoded_stream(enc: EncodedStream) -> bytes:
         raise ValueError("stream name troppo lungo (max 255)")
 
     out = bytearray()
-    out.append(0 if enc.encoding == "raw" else 1)          # enc
-    out.append(0 if enc.kind == "bytes" else 1)            # kind
+    out.append(0 if enc.encoding == "raw" else 1)  # enc
+    out.append(0 if enc.kind == "bytes" else 1)  # kind
     out.append(len(name_b))
     out += name_b
     out += enc.alphabet_size.to_bytes(4, "big")
@@ -1059,49 +1116,65 @@ def pack_encoded_stream(enc: EncodedStream) -> bytes:
     out += bs
     return bytes(out)
 
+
 def unpack_encoded_stream(blob: bytes, idx: int) -> tuple[EncodedStream, int]:
     if idx + 1 + 1 + 1 + 4 + 4 > len(blob):
         raise ValueError("bundle troncato (header stream)")
 
-    enc_flag = blob[idx]; idx += 1
-    kind_flag = blob[idx]; idx += 1
-    name_len = blob[idx]; idx += 1
+    enc_flag = blob[idx]
+    idx += 1
+    kind_flag = blob[idx]
+    idx += 1
+    name_len = blob[idx]
+    idx += 1
 
     if idx + name_len > len(blob):
         raise ValueError("bundle troncato (name)")
-    name = blob[idx:idx+name_len].decode("utf-8")
+    name = blob[idx : idx + name_len].decode("utf-8")
     idx += name_len
 
-    alphabet_size = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-    n = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+    alphabet_size = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
+    n = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
 
     encoding = "raw" if enc_flag == 0 else "huffman"
     kind = "bytes" if kind_flag == 0 else "ids"
 
     if encoding == "raw":
-        raw_len = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+        raw_len = int.from_bytes(blob[idx : idx + 4], "big")
+        idx += 4
         if idx + raw_len > len(blob):
             raise ValueError("bundle troncato (raw)")
-        raw = blob[idx:idx+raw_len]; idx += raw_len
-        return EncodedStream(name=name, kind=kind, alphabet_size=alphabet_size, n=n, encoding="raw", raw=raw), idx
+        raw = blob[idx : idx + raw_len]
+        idx += raw_len
+        return EncodedStream(
+            name=name, kind=kind, alphabet_size=alphabet_size, n=n, encoding="raw", raw=raw
+        ), idx
 
-    num_used = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-    used: List[tuple[int, int]] = []
+    num_used = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
+    used: list[tuple[int, int]] = []
     for _ in range(num_used):
         if idx + 8 > len(blob):
             raise ValueError("bundle troncato (freq entries)")
-        sym = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
-        f = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+        sym = int.from_bytes(blob[idx : idx + 4], "big")
+        idx += 4
+        f = int.from_bytes(blob[idx : idx + 4], "big")
+        idx += 4
         used.append((sym, f))
 
     if idx >= len(blob):
         raise ValueError("bundle troncato (lastbits)")
-    lastbits = blob[idx]; idx += 1
+    lastbits = blob[idx]
+    idx += 1
 
-    bs_len = int.from_bytes(blob[idx:idx+4], "big"); idx += 4
+    bs_len = int.from_bytes(blob[idx : idx + 4], "big")
+    idx += 4
     if idx + bs_len > len(blob):
         raise ValueError("bundle troncato (bitstream)")
-    bitstream = blob[idx:idx+bs_len]; idx += bs_len
+    bitstream = blob[idx : idx + bs_len]
+    idx += bs_len
 
     return EncodedStream(
         name=name,
@@ -1114,7 +1187,8 @@ def unpack_encoded_stream(blob: bytes, idx: int) -> tuple[EncodedStream, int]:
         bitstream=bitstream,
     ), idx
 
-def pack_huffman_bundle(encoded_streams: List[EncodedStream]) -> bytes:
+
+def pack_huffman_bundle(encoded_streams: list[EncodedStream]) -> bytes:
     if len(encoded_streams) > 0xFF:
         raise ValueError("troppi stream (max 255)")
     out = bytearray()
@@ -1126,22 +1200,27 @@ def pack_huffman_bundle(encoded_streams: List[EncodedStream]) -> bytes:
         out += sb
     return bytes(out)
 
-def unpack_huffman_bundle(payload: bytes) -> List[EncodedStream]:
+
+def unpack_huffman_bundle(payload: bytes) -> list[EncodedStream]:
     if len(payload) < 5 or payload[:4] != BUNDLE_MAGIC:
         raise ValueError("payload non è un Huffman bundle")
     idx = 4
-    n_streams = payload[idx]; idx += 1
-    streams: List[EncodedStream] = []
+    n_streams = payload[idx]
+    idx += 1
+    streams: list[EncodedStream] = []
     for _ in range(n_streams):
         if idx + 4 > len(payload):
             raise ValueError("bundle troncato (len)")
-        L = int.from_bytes(payload[idx:idx+4], "big"); idx += 4
+        L = int.from_bytes(payload[idx : idx + 4], "big")
+        idx += 4
         if idx + L > len(payload):
             raise ValueError("bundle troncato (stream blob)")
-        s_blob = payload[idx:idx+L]; idx += L
+        s_blob = payload[idx : idx + L]
+        idx += L
         s, _ = unpack_encoded_stream(s_blob, 0)
         streams.append(s)
     return streams
+
 
 # -------------------
 # Statistiche
@@ -1169,14 +1248,30 @@ def print_stats(original_path: str | Path, compressed_path: str | Path, label: s
     print(f"Bit/simbolo    : {bps:.3f} (8.0 = non compresso)")
     print("===============================")
 
+
 # -------------------
 # CLI
 # -------------------
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] not in (
-        "c1","d1","c2","d2","c3","d3","c4","d4","c5","d5","c6","d6","c7","d7","extract","extract-show"
+        "c1",
+        "d1",
+        "c2",
+        "d2",
+        "c3",
+        "d3",
+        "c4",
+        "d4",
+        "c5",
+        "d5",
+        "c6",
+        "d6",
+        "c7",
+        "d7",
+        "extract",
+        "extract-show",
     ):
-        print(f"Uso:")
+        print("Uso:")
         print(f"  {argv[0]} c1 input.txt output.gcc1   (compress Step1)")
         print(f"  {argv[0]} d1 input.gcc1 output.txt   (decompress Step1)")
         print(f"  {argv[0]} c2 input.txt output.gcc2   (compress Step2 V/C/O)")
@@ -1185,17 +1280,37 @@ def main(argv: List[str]) -> int:
         print(f"  {argv[0]} d3 input.gcc3 output.txt   (decompress Step3)")
         print(f"  {argv[0]} c4 input.txt output.gcc4   (compress Step4 parole)")
         print(f"  {argv[0]} d4 input.gcc4 output.txt   (decompress Step4)")
-        print(f"  {argv[0]} c5 input.txt output.gcc5 [layer_id_csv] [codec_id_csv]   (compress Container v5)")
-        print(f"  {argv[0]} d5 input.gcc5 output.txt                         (decompress Container v5)")
-        print(f"  {argv[0]} c6 input.txt output.gcc6 [layer_id_csv] [codec_id_csv]   (compress Container v6)")
-        print(f"  {argv[0]} d6 input.gcc6 output.txt                         (decompress Container v6)")
-        print(f"  {argv[0]} c7 input.txt output.gcc6 [layer_id] [codec_id] [stream_codecs] (compress v6+MBN multi-stream)")
-        print(f"    stream_codecs: es. MAIN:zstd_tight,MASK:zstd_tight,VOWELS:zstd_tight,CONS:zstd_tight")
-        print(f"  {argv[0]} d7 input.gccX output.txt                         (decompress universale v1..v6+MBN)")
-        print(f"  {argv[0]} extract input.any output.gcc6                    (lossy: estrae solo numeri)")
+        print(
+            f"  {argv[0]} c5 input.txt output.gcc5 [layer_id_csv] [codec_id_csv]   (compress Container v5)"
+        )
+        print(
+            f"  {argv[0]} d5 input.gcc5 output.txt                         (decompress Container v5)"
+        )
+        print(
+            f"  {argv[0]} c6 input.txt output.gcc6 [layer_id_csv] [codec_id_csv]   (compress Container v6)"
+        )
+        print(
+            f"  {argv[0]} d6 input.gcc6 output.txt                         (decompress Container v6)"
+        )
+        print(
+            f"  {argv[0]} c7 input.txt output.gcc6 [layer_id] [codec_id] [stream_codecs] (compress v6+MBN multi-stream)"
+        )
+        print(
+            "    stream_codecs: es. MAIN:zstd_tight,MASK:zstd_tight,VOWELS:zstd_tight,CONS:zstd_tight"
+        )
+        print(
+            f"  {argv[0]} d7 input.gccX output.txt                         (decompress universale v1..v6+MBN)"
+        )
+        print(
+            f"  {argv[0]} extract input.any output.gcc6                    (lossy: estrae solo numeri)"
+        )
         print(f"  {argv[0]} extract-show input.gcc6                          (mostra un EXTRACT)")
-        print(f"  layer_id_csv: bytes | syllables_it | words_it | ... (oppure CSV: es. bytes,words_it -> prova e sceglie il migliore)")
-        print(f"  codec_id_csv: huffman | zstd (oppure CSV: es. huffman,zstd -> prova e sceglie il migliore)")
+        print(
+            "  layer_id_csv: bytes | syllables_it | words_it | ... (oppure CSV: es. bytes,words_it -> prova e sceglie il migliore)"
+        )
+        print(
+            "  codec_id_csv: huffman | zstd (oppure CSV: es. huffman,zstd -> prova e sceglie il migliore)"
+        )
         return 1
 
     mode = argv[1]
@@ -1253,13 +1368,16 @@ def main(argv: List[str]) -> int:
         layer_id = argv[4] if len(argv) >= 5 else "bytes"
         codec_id = argv[5] if len(argv) >= 6 else "zstd_tight"
         stream_codecs = argv[6] if len(argv) >= 7 else None
-        compress_file_v7(inp, out, layer_id=layer_id, codec_id=codec_id, stream_codecs_spec=stream_codecs)
+        compress_file_v7(
+            inp, out, layer_id=layer_id, codec_id=codec_id, stream_codecs_spec=stream_codecs
+        )
     elif mode == "d7":
         decompress_file_v7(inp, out)
     elif mode == "extract":
         extract_numbers_only(inp, out)
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

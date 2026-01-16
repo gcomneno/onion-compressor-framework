@@ -1,31 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-from gcc_ocf.core.v5_dispatch import encode_v5_payload, decode_v5_payload
 from gcc_ocf.core.mbn_bundle import (
     MBN_MAGIC,
-    MBNStream,
+    ST_CONS,
+    ST_IDS,
     ST_MAIN,
     ST_MASK,
-    ST_VOWELS,
-    ST_CONS,
-    ST_TEXT,
-    ST_NUMS,
-    ST_TPL,
-    ST_IDS,
     ST_META,
+    ST_NUMS,
+    ST_TEXT,
+    ST_TPL,
+    ST_VOWELS,
+    MBNStream,
     pack_mbn,
     unpack_mbn,
 )
+from gcc_ocf.core.v5_dispatch import decode_v5_payload, encode_v5_payload
 
 MAGIC = b"GCC"
 VER_V6 = 6
 
 # v6 uses numeric IDs (u8) to avoid string overhead.
 # IMPORTANT: keep these mappings stable forever once you start writing v6 files.
-LAYER_TO_CODE: Dict[str, int] = {
+LAYER_TO_CODE: dict[str, int] = {
     "bytes": 0,
     "syllables_it": 1,
     "words_it": 2,
@@ -36,9 +36,9 @@ LAYER_TO_CODE: Dict[str, int] = {
     "tpl_lines_v0": 7,
     "tpl_lines_shared_v0": 8,
 }
-CODE_TO_LAYER: Dict[int, str] = {v: k for k, v in LAYER_TO_CODE.items()}
+CODE_TO_LAYER: dict[int, str] = {v: k for k, v in LAYER_TO_CODE.items()}
 
-CODEC_TO_CODE: Dict[str, int] = {
+CODEC_TO_CODE: dict[str, int] = {
     "huffman": 0,
     "zstd": 1,
     "zstd_tight": 2,
@@ -48,7 +48,7 @@ CODEC_TO_CODE: Dict[str, int] = {
     "zlib": 6,
     "num_v1": 7,
 }
-CODE_TO_CODEC: Dict[int, str] = {v: k for k, v in CODEC_TO_CODE.items()}
+CODE_TO_CODEC: dict[int, str] = {v: k for k, v in CODEC_TO_CODE.items()}
 
 # flags
 F_HAS_META = 0x01
@@ -71,7 +71,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -192,7 +192,9 @@ def compress_v6(engine: Any, data: bytes, *, layer_id: str, codec_id: str) -> by
     return pack_container_v6(payload, layer_id=layer_id, codec_id=codec_id, meta=b"")
 
 
-def _layer_to_mbn_raw_streams(layer_id: str, layer: Any, data: bytes) -> Tuple[List[Tuple[int, bytes]], bytes | None]:
+def _layer_to_mbn_raw_streams(
+    layer_id: str, layer: Any, data: bytes
+) -> tuple[list[tuple[int, bytes]], bytes | None]:
     """Esegue layer.encode e normalizza in una lista di stream raw bytes.
 
     Per ora supporta SOLO:
@@ -220,30 +222,48 @@ def _layer_to_mbn_raw_streams(layer_id: str, layer: Any, data: bytes) -> Tuple[L
         return [(ST_MAIN, bytes(symbols))], meta_bytes
 
     # vc0
-    if layer_id == "vc0" and isinstance(symbols, tuple) and len(symbols) == 3 and all(
-        isinstance(x, (bytes, bytearray)) for x in symbols
+    if (
+        layer_id == "vc0"
+        and isinstance(symbols, tuple)
+        and len(symbols) == 3
+        and all(isinstance(x, (bytes, bytearray)) for x in symbols)
     ):
         mask, vowels, cons = (bytes(symbols[0]), bytes(symbols[1]), bytes(symbols[2]))
         return [(ST_MASK, mask), (ST_VOWELS, vowels), (ST_CONS, cons)], meta_bytes
 
     # split_text_nums
-    if layer_id == "split_text_nums" and isinstance(symbols, tuple) and len(symbols) == 2 and all(
-        isinstance(x, (bytes, bytearray)) for x in symbols
+    if (
+        layer_id == "split_text_nums"
+        and isinstance(symbols, tuple)
+        and len(symbols) == 2
+        and all(isinstance(x, (bytes, bytearray)) for x in symbols)
     ):
         text_b, nums_b = bytes(symbols[0]), bytes(symbols[1])
         return [(ST_TEXT, text_b), (ST_NUMS, nums_b)], meta_bytes
 
     # tpl_lines_v0 / tpl_lines_shared_v0
-    if layer_id in ("tpl_lines_v0", "tpl_lines_shared_v0") and isinstance(symbols, tuple) and len(symbols) == 3 and all(
-        isinstance(x, (bytes, bytearray)) for x in symbols
+    if (
+        layer_id in ("tpl_lines_v0", "tpl_lines_shared_v0")
+        and isinstance(symbols, tuple)
+        and len(symbols) == 3
+        and all(isinstance(x, (bytes, bytearray)) for x in symbols)
     ):
         tpl_b, ids_b, nums_b = bytes(symbols[0]), bytes(symbols[1]), bytes(symbols[2])
         return [(ST_TPL, tpl_b), (ST_IDS, ids_b), (ST_NUMS, nums_b)], meta_bytes
 
-    raise NotImplementedError("MBN per ora supporta solo layer bytes/vc0/split_text_nums/tpl_lines_v0/tpl_lines_shared_v0")
+    raise NotImplementedError(
+        "MBN per ora supporta solo layer bytes/vc0/split_text_nums/tpl_lines_v0/tpl_lines_shared_v0"
+    )
 
 
-def compress_v6_mbn(engine: Any, data: bytes, *, layer_id: str, codec_id: str, stream_codecs: dict[int, str] | None = None) -> bytes:
+def compress_v6_mbn(
+    engine: Any,
+    data: bytes,
+    *,
+    layer_id: str,
+    codec_id: str,
+    stream_codecs: dict[int, str] | None = None,
+) -> bytes:
     """Container v6 + payload MBN (multi-stream), per ora solo bytes/vc0.
 
     - `codec_id` è il default applicato agli stream.
@@ -265,7 +285,7 @@ def compress_v6_mbn(engine: Any, data: bytes, *, layer_id: str, codec_id: str, s
         for k, v in stream_codecs.items():
             sc[int(k)] = str(v)
 
-    records: List[MBNStream] = []
+    records: list[MBNStream] = []
 
     for stype, raw in raw_streams:
         # codec per-stream, fallback al default
@@ -309,9 +329,9 @@ def compress_v6_mbn(engine: Any, data: bytes, *, layer_id: str, codec_id: str, s
     return pack_container_v6(payload, layer_id=layer_id, codec_id="mbn", meta=b"")
 
 
-def _decode_mbn_payload_to_raw(engine: Any, payload: bytes) -> List[Tuple[int, bytes]]:
+def _decode_mbn_payload_to_raw(engine: Any, payload: bytes) -> list[tuple[int, bytes]]:
     streams = unpack_mbn(payload)
-    out: List[Tuple[int, bytes]] = []
+    out: list[tuple[int, bytes]] = []
     for s in streams:
         cid = CODE_TO_CODEC.get(int(s.codec))
         if cid is None:
@@ -324,7 +344,9 @@ def _decode_mbn_payload_to_raw(engine: Any, payload: bytes) -> List[Tuple[int, b
     return out
 
 
-def unpack_v6_mbn_raw(engine: Any, blob: bytes, *, allow_extract: bool = True) -> List[Tuple[int, bytes]]:
+def unpack_v6_mbn_raw(
+    engine: Any, blob: bytes, *, allow_extract: bool = True
+) -> list[tuple[int, bytes]]:
     """Ritorna gli stream raw (già decompressi) per container v6+MBN.
 
     Serve a extract-show e diagnostica.
@@ -349,7 +371,7 @@ def decompress_v6(engine: Any, blob: bytes, *, allow_extract: bool = False) -> b
         raw_pairs = _decode_mbn_payload_to_raw(engine, h.payload)
 
         meta_bytes = None
-        by_type: Dict[int, bytes] = {}
+        by_type: dict[int, bytes] = {}
         for stype, raw in raw_pairs:
             if stype == ST_META:
                 meta_bytes = raw

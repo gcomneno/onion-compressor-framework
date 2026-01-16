@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 from gcc_ocf.core.bundle import SymbolStream
 from gcc_ocf.core.codec_zstd import CodecZstd
 
@@ -24,7 +22,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -41,7 +39,7 @@ def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
     return x, idx
 
 
-def _pack_ids_varint(ids: List[int]) -> bytes:
+def _pack_ids_varint(ids: list[int]) -> bytes:
     out = bytearray()
     for v in ids:
         if v < 0:
@@ -50,8 +48,8 @@ def _pack_ids_varint(ids: List[int]) -> bytes:
     return bytes(out)
 
 
-def _unpack_ids_varint(data: bytes, n: int) -> List[int]:
-    ids: List[int] = []
+def _unpack_ids_varint(data: bytes, n: int) -> list[int]:
+    ids: list[int] = []
     idx = 0
     for _ in range(n):
         v, idx = _dec_varint(data, idx)
@@ -64,7 +62,7 @@ def _unpack_ids_varint(data: bytes, n: int) -> List[int]:
 # -------------------------
 # ZBN1 (legacy): per-stream compression
 # -------------------------
-def pack_zstd_bundle(streams: List[SymbolStream], codec: Optional[CodecZstd] = None) -> bytes:
+def pack_zstd_bundle(streams: list[SymbolStream], codec: CodecZstd | None = None) -> bytes:
     if codec is None:
         codec = CodecZstd()
 
@@ -107,7 +105,7 @@ def pack_zstd_bundle(streams: List[SymbolStream], codec: Optional[CodecZstd] = N
     return bytes(out)
 
 
-def unpack_zstd_bundle(blob: bytes, codec: Optional[CodecZstd] = None) -> List[SymbolStream]:
+def unpack_zstd_bundle(blob: bytes, codec: CodecZstd | None = None) -> list[SymbolStream]:
     if codec is None:
         codec = CodecZstd()
 
@@ -117,7 +115,7 @@ def unpack_zstd_bundle(blob: bytes, codec: Optional[CodecZstd] = None) -> List[S
     idx = 4
     n_streams, idx = _dec_varint(blob, idx)
 
-    streams: List[SymbolStream] = []
+    streams: list[SymbolStream] = []
     for _ in range(n_streams):
         if idx >= len(blob):
             raise ValueError("bundle troncato (name_len)")
@@ -125,7 +123,7 @@ def unpack_zstd_bundle(blob: bytes, codec: Optional[CodecZstd] = None) -> List[S
         idx += 1
         if idx + name_len > len(blob):
             raise ValueError("bundle troncato (name)")
-        name = blob[idx:idx + name_len].decode("utf-8")
+        name = blob[idx : idx + name_len].decode("utf-8")
         idx += name_len
 
         if idx >= len(blob):
@@ -135,15 +133,15 @@ def unpack_zstd_bundle(blob: bytes, codec: Optional[CodecZstd] = None) -> List[S
 
         if idx + 4 + 4 > len(blob):
             raise ValueError("bundle troncato (sizes)")
-        alphabet_size = int.from_bytes(blob[idx:idx + 4], "big")
+        alphabet_size = int.from_bytes(blob[idx : idx + 4], "big")
         idx += 4
-        n = int.from_bytes(blob[idx:idx + 4], "big")
+        n = int.from_bytes(blob[idx : idx + 4], "big")
         idx += 4
 
         comp_len, idx = _dec_varint(blob, idx)
         if idx + comp_len > len(blob):
             raise ValueError("bundle troncato (comp bytes)")
-        comp = blob[idx:idx + comp_len]
+        comp = blob[idx : idx + comp_len]
         idx += comp_len
 
         payload = codec.decompress(comp)
@@ -155,7 +153,9 @@ def unpack_zstd_bundle(blob: bytes, codec: Optional[CodecZstd] = None) -> List[S
             streams.append(SymbolStream(name=name, kind="bytes", alphabet_size=256, n=n, data=data))
         elif kind_b == 1:
             ids = _unpack_ids_varint(payload, n)
-            streams.append(SymbolStream(name=name, kind="ids", alphabet_size=alphabet_size, n=n, data=ids))
+            streams.append(
+                SymbolStream(name=name, kind="ids", alphabet_size=alphabet_size, n=n, data=ids)
+            )
         else:
             raise ValueError(f"kind byte sconosciuto: {kind_b}")
 
@@ -165,7 +165,7 @@ def unpack_zstd_bundle(blob: bytes, codec: Optional[CodecZstd] = None) -> List[S
 # -------------------------
 # ZBN2 (new): single-frame compression for all streams together
 # -------------------------
-def _pack_inner(streams: List[SymbolStream]) -> bytes:
+def _pack_inner(streams: list[SymbolStream]) -> bytes:
     inner = bytearray()
     inner += _enc_varint(len(streams))
 
@@ -202,11 +202,11 @@ def _pack_inner(streams: List[SymbolStream]) -> bytes:
     return bytes(inner)
 
 
-def _unpack_inner(inner: bytes) -> List[SymbolStream]:
+def _unpack_inner(inner: bytes) -> list[SymbolStream]:
     idx = 0
     n_streams, idx = _dec_varint(inner, idx)
 
-    streams: List[SymbolStream] = []
+    streams: list[SymbolStream] = []
     for _ in range(n_streams):
         if idx >= len(inner):
             raise ValueError("inner troncato (name_len)")
@@ -214,7 +214,7 @@ def _unpack_inner(inner: bytes) -> List[SymbolStream]:
         idx += 1
         if idx + name_len > len(inner):
             raise ValueError("inner troncato (name)")
-        name = inner[idx:idx + name_len].decode("utf-8")
+        name = inner[idx : idx + name_len].decode("utf-8")
         idx += name_len
 
         if idx >= len(inner):
@@ -224,24 +224,28 @@ def _unpack_inner(inner: bytes) -> List[SymbolStream]:
 
         if idx + 4 + 4 > len(inner):
             raise ValueError("inner troncato (sizes)")
-        alphabet_size = int.from_bytes(inner[idx:idx + 4], "big")
+        alphabet_size = int.from_bytes(inner[idx : idx + 4], "big")
         idx += 4
-        n = int.from_bytes(inner[idx:idx + 4], "big")
+        n = int.from_bytes(inner[idx : idx + 4], "big")
         idx += 4
 
         payload_len, idx = _dec_varint(inner, idx)
         if idx + payload_len > len(inner):
             raise ValueError("inner troncato (payload)")
-        payload = inner[idx:idx + payload_len]
+        payload = inner[idx : idx + payload_len]
         idx += payload_len
 
         if kind_b == 0:
             if len(payload) != n:
                 raise ValueError("inner corrotto: n mismatch (bytes)")
-            streams.append(SymbolStream(name=name, kind="bytes", alphabet_size=256, n=n, data=payload))
+            streams.append(
+                SymbolStream(name=name, kind="bytes", alphabet_size=256, n=n, data=payload)
+            )
         elif kind_b == 1:
             ids = _unpack_ids_varint(payload, n)
-            streams.append(SymbolStream(name=name, kind="ids", alphabet_size=alphabet_size, n=n, data=ids))
+            streams.append(
+                SymbolStream(name=name, kind="ids", alphabet_size=alphabet_size, n=n, data=ids)
+            )
         else:
             raise ValueError(f"kind byte sconosciuto: {kind_b}")
 
@@ -250,7 +254,7 @@ def _unpack_inner(inner: bytes) -> List[SymbolStream]:
     return streams
 
 
-def pack_zstd_bundle2(streams: List[SymbolStream], codec: Optional[CodecZstd] = None) -> bytes:
+def pack_zstd_bundle2(streams: list[SymbolStream], codec: CodecZstd | None = None) -> bytes:
     if codec is None:
         codec = CodecZstd()
     inner = _pack_inner(streams)
@@ -262,7 +266,7 @@ def pack_zstd_bundle2(streams: List[SymbolStream], codec: Optional[CodecZstd] = 
     return bytes(out)
 
 
-def unpack_zstd_bundle2(blob: bytes, codec: Optional[CodecZstd] = None) -> List[SymbolStream]:
+def unpack_zstd_bundle2(blob: bytes, codec: CodecZstd | None = None) -> list[SymbolStream]:
     if codec is None:
         codec = CodecZstd()
 

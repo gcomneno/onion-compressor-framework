@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List, Tuple
-
 
 def _enc_varint(x: int) -> bytes:
     if x < 0:
@@ -18,7 +16,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     while True:
@@ -43,7 +41,7 @@ def _zigzag_dec(u: int) -> int:
     return (u >> 1) if (u & 1) == 0 else -(u >> 1) - 1
 
 
-def encode_ints(ints: List[int]) -> bytes:
+def encode_ints(ints: list[int]) -> bytes:
     """Encode lista di int come concatenazione di uvarint(zigzag(int))."""
     out = bytearray()
     for n in ints:
@@ -51,9 +49,9 @@ def encode_ints(ints: List[int]) -> bytes:
     return bytes(out)
 
 
-def decode_ints(raw: bytes) -> List[int]:
+def decode_ints(raw: bytes) -> list[int]:
     """Decode concatenazione uvarint(zigzag(int)) fino a EOF."""
-    out: List[int] = []
+    out: list[int] = []
     idx = 0
     b = bytes(raw)
     while idx < len(b):

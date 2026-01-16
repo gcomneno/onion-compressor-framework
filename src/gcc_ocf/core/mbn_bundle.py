@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
 
 MBN_MAGIC = b"MBN"  # 3 bytes
 
@@ -37,7 +36,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     """Unsigned LEB128 decode."""
     shift = 0
     x = 0
@@ -68,7 +67,7 @@ def is_mbn(payload: bytes) -> bool:
     return len(payload) >= 3 and payload[:3] == MBN_MAGIC
 
 
-def pack_mbn(streams: List[MBNStream]) -> bytes:
+def pack_mbn(streams: list[MBNStream]) -> bytes:
     out = bytearray()
     out += MBN_MAGIC
     out += _enc_varint(len(streams))
@@ -93,7 +92,7 @@ def pack_mbn(streams: List[MBNStream]) -> bytes:
     return bytes(out)
 
 
-def unpack_mbn(payload: bytes) -> List[MBNStream]:
+def unpack_mbn(payload: bytes) -> list[MBNStream]:
     if not is_mbn(payload):
         raise ValueError("MBN: magic non valido")
 
@@ -102,7 +101,7 @@ def unpack_mbn(payload: bytes) -> List[MBNStream]:
     if n > 10_000:
         raise ValueError("MBN: nstreams troppo grande (sanity check)")
 
-    streams: List[MBNStream] = []
+    streams: list[MBNStream] = []
     for _ in range(n):
         if idx + 2 > len(payload):
             raise ValueError("MBN: header stream troncato")

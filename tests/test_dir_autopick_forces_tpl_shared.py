@@ -26,7 +26,7 @@ def _write_fattura_like_dense(dir_: Path, *, n_files: int = 24, n_lines: int = 4
             prezzo = 0.75 + (j % 7) * 0.10
             tot = qta * prezzo
             out.append(f"RIGA ARTICOLO: vite M3 QTA {qta} PREZZO {prezzo:.2f} TOT {tot:.2f}")
-        imponibile = sum(( (j % 9) + 1) * (0.75 + (j % 7) * 0.10) for j in range(n_lines))
+        imponibile = sum(((j % 9) + 1) * (0.75 + (j % 7) * 0.10) for j in range(n_lines))
         iva = imponibile * 0.22
         totale = imponibile + iva
         out.append(f"IMPONIBILE {imponibile:.2f}")
@@ -36,7 +36,9 @@ def _write_fattura_like_dense(dir_: Path, *, n_files: int = 24, n_lines: int = 4
         (dir_ / f"fattura_dense_{i:02d}.txt").write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def test_autopick_prefers_tpl_lines_shared_when_pool_restricted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_autopick_prefers_tpl_lines_shared_when_pool_restricted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Force candidate pool to tpl_lines_shared_v0 first, tpl_lines_v0 fallback.
 
     Expectation:
@@ -44,9 +46,9 @@ def test_autopick_prefers_tpl_lines_shared_when_pool_restricted(tmp_path: Path, 
       - chosen layer = tpl_lines_shared_v0
       - archive contains tpl_dict_v0 resource
     """
+    from gcc_ocf.core.gca import GCAReader
     from gcc_ocf.dir_pipeline_spec import load_dir_pipeline_spec
     from gcc_ocf.legacy import gcc_dir as gd
-    from gcc_ocf.core.gca import GCAReader
 
     # Isolate TOP db writes away from the real repo
     fake_repo = tmp_path / "fake_repo"
@@ -75,7 +77,9 @@ def test_autopick_prefers_tpl_lines_shared_when_pool_restricted(tmp_path: Path, 
             "num_dict_v1": {"enabled": True, "k": 64},
         },
     }
-    spec_path.write_text(json.dumps(spec_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    spec_path.write_text(
+        json.dumps(spec_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     dir_spec = load_dir_pipeline_spec("@" + str(spec_path))
 
     out_dir = tmp_path / "out"

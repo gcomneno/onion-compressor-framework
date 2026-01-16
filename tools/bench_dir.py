@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import resource
 import shutil
 import time
-import resource
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 
 def _peak_rss_kb() -> int:
@@ -53,13 +53,21 @@ def _dir_diff_equal(a: Path, b: Path) -> bool:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench_dir.py", description="GCC-OCF directory benchmark")
     ap.add_argument("input_dir", type=Path)
-    ap.add_argument("--pipeline", default=None, help="Dir pipeline spec (@file.json or inline JSON)")
+    ap.add_argument(
+        "--pipeline", default=None, help="Dir pipeline spec (@file.json or inline JSON)"
+    )
     ap.add_argument("--buckets", type=int, default=None)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--iters", type=int, default=3)
-    ap.add_argument("--output", type=Path, default=None, help="Optional output dir (will be wiped each iter)")
-    ap.add_argument("--restore", type=Path, default=None, help="Optional restore dir (will be wiped each iter)")
-    ap.add_argument("--full-verify", action="store_true", help="Run verify --full (sha256+crc32 over blobs)")
+    ap.add_argument(
+        "--output", type=Path, default=None, help="Optional output dir (will be wiped each iter)"
+    )
+    ap.add_argument(
+        "--restore", type=Path, default=None, help="Optional restore dir (will be wiped each iter)"
+    )
+    ap.add_argument(
+        "--full-verify", action="store_true", help="Run verify --full (sha256+crc32 over blobs)"
+    )
     ns = ap.parse_args(argv)
 
     from gcc_ocf.dir_pipeline_spec import load_dir_pipeline_spec
@@ -73,12 +81,16 @@ def main(argv: list[str] | None = None) -> int:
     dir_spec = load_dir_pipeline_spec(ns.pipeline) if ns.pipeline else None
 
     # Resolve buckets precedence like CLI
-    buckets = int(ns.buckets) if ns.buckets is not None else (int(dir_spec.buckets) if dir_spec and dir_spec.buckets is not None else 16)
+    buckets = (
+        int(ns.buckets)
+        if ns.buckets is not None
+        else (int(dir_spec.buckets) if dir_spec and dir_spec.buckets is not None else 16)
+    )
 
     out = (ns.output or Path("/tmp/gcc_ocf_bench_out")).resolve()
     rst = (ns.restore or Path("/tmp/gcc_ocf_bench_restore")).resolve()
 
-    rows: list[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     t0_all = time.perf_counter()
 
     for i in range(int(ns.iters)):

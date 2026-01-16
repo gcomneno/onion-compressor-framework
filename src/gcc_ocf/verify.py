@@ -110,8 +110,8 @@ def verify_gca(path: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_D
             if exp_crc is not None:
                 try:
                     _ = int(exp_crc)
-                except Exception:
-                    raise CorruptPayload(f"GCA blob_crc32 malformato per {rel}")
+                except Exception as err:
+                    raise CorruptPayload(f"GCA blob_crc32 malformato per {rel}") from err
             if full:
                 got, got_crc = rd.sha256_crc32_blob(off, ln, chunk_size=chunk_size)
                 exp_crc = e.get("blob_crc32")
@@ -120,8 +120,8 @@ def verify_gca(path: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_D
                 if exp_crc is not None:
                     try:
                         exp_crc_i = int(exp_crc)
-                    except Exception:
-                        raise CorruptPayload(f"GCA blob_crc32 malformato per {rel}")
+                    except Exception as err:
+                        raise CorruptPayload(f"GCA blob_crc32 malformato per {rel}") from err
                     if int(got_crc) != exp_crc_i:
                         raise HashMismatch(f"GCA blob CRC mismatch per {rel}")
 
@@ -192,8 +192,8 @@ def verify_packed_dir(
                     if exp_crc is not None:
                         try:
                             exp_crc_i = int(exp_crc)
-                        except Exception:
-                            raise CorruptPayload(f"GCA blob_crc32 malformato per {r}")
+                        except Exception as err:
+                            raise CorruptPayload(f"GCA blob_crc32 malformato per {r}") from err
                         if int(got_crc) != exp_crc_i:
                             raise HashMismatch(f"blob CRC mismatch: {r}")
 
@@ -240,10 +240,10 @@ def verify_packed_dir(
                                         if exp_crc is not None:
                                             try:
                                                 exp_crc_i = int(exp_crc)
-                                            except Exception:
+                                            except Exception as err:
                                                 raise CorruptPayload(
                                                     f"GCA blob_crc32 malformato per resource {name}"
-                                                )
+                                                ) from err
                                             if int(recomputed_crc) != exp_crc_i:
                                                 raise HashMismatch(
                                                     f"resource blob CRC mismatch: {arch} {name}"
@@ -266,13 +266,13 @@ def verify_container_file(path: Path, *, full: bool = False) -> None:
     blob = p.read_bytes()
     try:
         unpack_container_v6(blob)
-    except ValueError as e:
-        msg = str(e)
+    except ValueError as err:
+        msg = str(err)
         if "magic" in msg:
-            raise BadMagic(msg)
+            raise BadMagic(msg) from err
         if "version" in msg:
-            raise UnsupportedVersion(msg)
-        raise CorruptPayload(msg)
+            raise UnsupportedVersion(msg) from err
+        raise CorruptPayload(msg) from err
 
     if full:
         # Use universal decoder for deeper validation.

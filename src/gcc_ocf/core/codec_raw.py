@@ -5,6 +5,7 @@ class CodecRaw:
     """
     Codec identity: utile per stream piccoli (meta) e per debug.
     """
+
     codec_id: str = "raw"
 
     def compress(self, data: bytes) -> bytes:

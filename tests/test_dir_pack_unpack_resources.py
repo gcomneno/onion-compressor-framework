@@ -20,47 +20,49 @@ def _write_fattura_like(dir_: Path, *, n: int = 8) -> None:
             f"CODICE ART 000{i:02d} LOTTO 202601{day:02d}",
             "",
         ]
-        (dir_ / f"fattura_{i:02d}.txt").write_text("\n".join(lines), encoding='utf-8')
+        (dir_ / f"fattura_{i:02d}.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_pack_unpack_dir_writes_tpl_resource_and_roundtrips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from gcc_ocf.legacy import gcc_dir as gd
+def test_pack_unpack_dir_writes_tpl_resource_and_roundtrips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from gcc_ocf.core.gca import GCAReader
+    from gcc_ocf.legacy import gcc_dir as gd
 
     # Isolate TOP db writes away from the real repo
-    fake_repo = tmp_path / 'fake_repo'
-    (fake_repo / 'tools').mkdir(parents=True)
-    (fake_repo / 'tools' / 'top_pipelines.json').write_text('{}', encoding='utf-8')
-    monkeypatch.setattr(gd, '_repo_root', lambda: fake_repo)
+    fake_repo = tmp_path / "fake_repo"
+    (fake_repo / "tools").mkdir(parents=True)
+    (fake_repo / "tools" / "top_pipelines.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(gd, "_repo_root", lambda: fake_repo)
 
-    input_dir = tmp_path / 'in'
+    input_dir = tmp_path / "in"
     _write_fattura_like(input_dir, n=8)
 
-    out_dir = tmp_path / 'out'
+    out_dir = tmp_path / "out"
     gd.packdir(input_dir, out_dir, buckets=1)
 
     # Manifest has bucket_summary lines (ignored by unpackdir)
-    manifest = out_dir / 'manifest.jsonl'
-    first = json.loads(manifest.read_text(encoding='utf-8').splitlines()[0])
-    assert first.get('kind') == 'bucket_summary'
+    manifest = out_dir / "manifest.jsonl"
+    first = json.loads(manifest.read_text(encoding="utf-8").splitlines()[0])
+    assert first.get("kind") == "bucket_summary"
 
     # Autopick report must exist
-    report = json.loads((out_dir / 'autopick_report.json').read_text(encoding='utf-8'))
-    assert report.get('schema') == 'gcc-ocf.autopick_report.v1'
-    assert '00' in report.get('buckets', {})
+    report = json.loads((out_dir / "autopick_report.json").read_text(encoding="utf-8"))
+    assert report.get("schema") == "gcc-ocf.autopick_report.v1"
+    assert "00" in report.get("buckets", {})
 
     # The single-bucket archive must contain tpl_dict_v0 resource
-    arch = out_dir / 'bucket_00.gca'
+    arch = out_dir / "bucket_00.gca"
     assert arch.is_file()
     with GCAReader(arch) as rd:
         res = rd.load_resources()
-    assert 'tpl_dict_v0' in res
+    assert "tpl_dict_v0" in res
 
     # Roundtrip unpackdir
-    restore_dir = tmp_path / 'restore'
+    restore_dir = tmp_path / "restore"
     gd.unpackdir(out_dir, restore_dir)
 
-    for p in sorted(input_dir.rglob('*')):
+    for p in sorted(input_dir.rglob("*")):
         if not p.is_file():
             continue
         rel = p.relative_to(input_dir)

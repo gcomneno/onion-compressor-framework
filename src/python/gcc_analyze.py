@@ -13,7 +13,9 @@ def main(argv: list[str]) -> int:
         print(f"  {argv[0]} bucket-dir <report.jsonl> <buckets> <out.jsonl>")
         print("")
         print("Note:")
-        print("  - TB_MODULE (opzionale): modulo python con bucket_for_fingerprint(simhash64, buckets)->bucket")
+        print(
+            "  - TB_MODULE (opzionale): modulo python con bucket_for_fingerprint(simhash64, buckets)->bucket"
+        )
         return 1
 
     cmd = argv[1]

@@ -6,13 +6,17 @@ from pathlib import Path
 def _make_fattura_lines(*, n: int = 10) -> bytes:
     lines = ["FATTURA 3003"]
     for i in range(n):
-        lines.append(f"RIGA ARTICOLO: vite M3 qty={i+1} prezzo=1.20 TOT={(i+1)*1.2:.2f}")
+        lines.append(f"RIGA ARTICOLO: vite M3 qty={i + 1} prezzo=1.20 TOT={(i + 1) * 1.2:.2f}")
     lines.append("TOTALE 66.00")
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def test_tpl_lines_shared_base_dict_produces_delta_and_roundtrips(tmp_path: Path) -> None:
-    from gcc_ocf.layers.tpl_lines_shared_v0 import LayerTplLinesSharedV0, pack_tpl_dict_v0_resource, unpack_tpl_dict_v0_resource
+    from gcc_ocf.layers.tpl_lines_shared_v0 import (
+        LayerTplLinesSharedV0,
+        pack_tpl_dict_v0_resource,
+        unpack_tpl_dict_v0_resource,
+    )
 
     # Build a base dict from a first sample (bucket-level resource simulation)
     base_data = _make_fattura_lines(n=12)
@@ -53,9 +57,11 @@ def test_tpl_lines_shared_fails_on_tag_mismatch(tmp_path: Path) -> None:
 
     base_data = _make_fattura_lines(n=8)
     from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0
+
     v0 = LayerTplLinesV0()
     (tpl_raw_full, _, _), _ = v0.encode(base_data)
     from gcc_ocf.layers.tpl_lines_v0 import _unpack_templates
+
     base_templates = _unpack_templates(tpl_raw_full)
 
     shared = LayerTplLinesSharedV0()
@@ -69,6 +75,6 @@ def test_tpl_lines_shared_fails_on_tag_mismatch(tmp_path: Path) -> None:
 
     try:
         shared.decode((tpl_raw, ids_raw, nums_raw), meta)
-        assert False, "expected tag8 mismatch error"
+        raise AssertionError("expected tag8 mismatch error")
     except ValueError as e:
         assert "tag8 mismatch" in str(e)

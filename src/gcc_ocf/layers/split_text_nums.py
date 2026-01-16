@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any
 
-from gcc_ocf.core.num_stream import encode_ints, decode_ints
+from gcc_ocf.core.num_stream import decode_ints, encode_ints
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class LayerSplitTextNums:
     FMT_VERSION = 1
     TOK_RULES = 1
 
-    def encode(self, data: bytes) -> Tuple[Tuple[bytes, bytes], Dict[str, Any]]:
+    def encode(self, data: bytes) -> tuple[tuple[bytes, bytes], dict[str, Any]]:
         b = bytes(data)
 
         chunks: list[bytes] = []
@@ -72,7 +72,16 @@ class LayerSplitTextNums:
             if prev in (9, 10, 13, 32):
                 return True
             # common "value" separators
-            if prev in (ord("("), ord("["), ord("{"), ord("<"), ord("="), ord(":"), ord(","), ord(";")):
+            if prev in (
+                ord("("),
+                ord("["),
+                ord("{"),
+                ord("<"),
+                ord("="),
+                ord(":"),
+                ord(","),
+                ord(";"),
+            ):
                 return True
             return False
 
@@ -136,7 +145,7 @@ class LayerSplitTextNums:
         nums_stream = encode_ints(seq)
         return (text_stream, nums_stream), {"fmt": self.FMT_VERSION, "tok": self.TOK_RULES}
 
-    def decode(self, symbols: Tuple[bytes, bytes], layer_meta: Dict[str, Any]) -> bytes:
+    def decode(self, symbols: tuple[bytes, bytes], layer_meta: dict[str, Any]) -> bytes:
         # Versioning: oggi il decoder supporta fmt 0 (legacy/no-meta) e fmt 1 (attuale).
         fmt = int((layer_meta or {}).get("fmt", 0) or 0)
         if fmt not in (0, self.FMT_VERSION):

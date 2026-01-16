@@ -13,8 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 SPEC_ID_V1 = "gcc-ocf.pipeline.v1"
 
@@ -23,7 +22,7 @@ class PipelineSpecError(ValueError):
     pass
 
 
-def _load_json_arg(pipeline_arg: str) -> Dict[str, Any]:
+def _load_json_arg(pipeline_arg: str) -> dict[str, Any]:
     s = pipeline_arg.strip()
     if not s:
         raise PipelineSpecError("pipeline: argomento vuoto")
@@ -50,14 +49,14 @@ def _load_json_arg(pipeline_arg: str) -> Dict[str, Any]:
     return obj
 
 
-def _require_str(obj: Dict[str, Any], key: str) -> str:
+def _require_str(obj: dict[str, Any], key: str) -> str:
     v = obj.get(key)
     if not isinstance(v, str) or not v.strip():
         raise PipelineSpecError(f"pipeline: campo '{key}' richiesto (string)")
     return v.strip()
 
 
-def _optional_bool(obj: Dict[str, Any], key: str) -> Optional[bool]:
+def _optional_bool(obj: dict[str, Any], key: str) -> bool | None:
     if key not in obj:
         return None
     v = obj.get(key)
@@ -66,7 +65,7 @@ def _optional_bool(obj: Dict[str, Any], key: str) -> Optional[bool]:
     raise PipelineSpecError(f"pipeline: campo '{key}' deve essere booleano")
 
 
-def _optional_stream_codecs(obj: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def _optional_stream_codecs(obj: dict[str, Any]) -> dict[str, str] | None:
     if "stream_codecs" not in obj:
         return None
     v = obj.get("stream_codecs")
@@ -74,7 +73,7 @@ def _optional_stream_codecs(obj: Dict[str, Any]) -> Optional[Dict[str, str]]:
         return None
     if not isinstance(v, dict):
         raise PipelineSpecError("pipeline: 'stream_codecs' deve essere un oggetto {STREAM: codec}")
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for k, vv in v.items():
         if not isinstance(k, str) or not k.strip():
             raise PipelineSpecError("pipeline: 'stream_codecs' ha una chiave non-stringa")
@@ -91,10 +90,10 @@ class PipelineSpecV1:
     name: str
     layer: str
     codec: str
-    stream_codecs: Optional[Dict[str, str]] = None
-    mbn: Optional[bool] = None
+    stream_codecs: dict[str, str] | None = None
+    mbn: bool | None = None
 
-    def stream_codecs_spec(self) -> Optional[str]:
+    def stream_codecs_spec(self) -> str | None:
         """Return the legacy 'TEXT:zlib,NUMS:num_v1' string, deterministic order."""
         if not self.stream_codecs:
             return None
@@ -138,4 +137,6 @@ def load_pipeline_spec(pipeline_arg: str) -> PipelineSpecV1:
     stream_codecs = _optional_stream_codecs(obj)
     mbn = _optional_bool(obj, "mbn")
 
-    return PipelineSpecV1(name=name.strip(), layer=layer, codec=codec, stream_codecs=stream_codecs, mbn=mbn)
+    return PipelineSpecV1(
+        name=name.strip(), layer=layer, codec=codec, stream_codecs=stream_codecs, mbn=mbn
+    )

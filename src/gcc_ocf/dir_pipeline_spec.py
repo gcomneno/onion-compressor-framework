@@ -14,10 +14,10 @@ Design goals:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
-
+from typing import Any
 
 SCHEMA_ID = "gcc-ocf.dir_pipeline.v1"
 
@@ -41,42 +41,42 @@ _STREAM_NAME_TO_KEY = {
 
 @dataclass(frozen=True)
 class DirAutopick:
-    enabled: Optional[bool] = None
-    sample_n: Optional[int] = None
-    top_k: Optional[int] = None
-    top_db_max: Optional[int] = None
-    refresh_top: Optional[bool] = None
+    enabled: bool | None = None
+    sample_n: int | None = None
+    top_k: int | None = None
+    top_db_max: int | None = None
+    refresh_top: bool | None = None
 
 
 @dataclass(frozen=True)
 class DirResourceNumDictV1:
-    enabled: Optional[bool] = None
-    k: Optional[int] = None
+    enabled: bool | None = None
+    k: int | None = None
 
 
 @dataclass(frozen=True)
 class DirResourceTplDictV0:
     """Bucket-level shared template dictionary for tpl_lines_shared_v0 (archive-only)."""
 
-    enabled: Optional[bool] = None
-    k: Optional[int] = None
+    enabled: bool | None = None
+    k: int | None = None
 
 
 @dataclass(frozen=True)
 class DirPlan:
     layer: str
     codec: str
-    stream_codecs: Optional[Dict[str, str]] = None
+    stream_codecs: dict[str, str] | None = None
     note: str = ""
 
 
 @dataclass(frozen=True)
 class DirPipelineSpec:
     spec: str
-    buckets: Optional[int] = None
-    archive: Optional[bool] = None
+    buckets: int | None = None
+    archive: bool | None = None
     autopick: DirAutopick = DirAutopick()
-    candidate_pools: Dict[str, List[DirPlan]] = None  # type: ignore[assignment]
+    candidate_pools: dict[str, list[DirPlan]] = None  # type: ignore[assignment]
     num_dict_v1: DirResourceNumDictV1 = DirResourceNumDictV1()
     tpl_dict_v0: DirResourceTplDictV0 = DirResourceTplDictV0()
 
@@ -108,7 +108,9 @@ def _ensure_allowed_keys(obj_name: str, obj: Mapping[str, Any], allowed: Iterabl
     allowed_set = set(allowed)
     extra = [k for k in obj.keys() if k not in allowed_set]
     if extra:
-        raise DirPipelineSpecError(f"dir pipeline spec: chiavi non supportate in {obj_name}: {', '.join(sorted(extra))}")
+        raise DirPipelineSpecError(
+            f"dir pipeline spec: chiavi non supportate in {obj_name}: {', '.join(sorted(extra))}"
+        )
 
 
 def _parse_autopick(v: Any) -> DirAutopick:
@@ -140,7 +142,13 @@ def _parse_autopick(v: Any) -> DirAutopick:
             raise DirPipelineSpecError("dir pipeline spec: autopick.top_db_max deve essere >= 1")
     if refresh_top is not None:
         _expect_type("autopick.refresh_top", refresh_top, bool)
-    return DirAutopick(enabled=enabled, sample_n=sample_n, top_k=top_k, top_db_max=top_db_max, refresh_top=refresh_top)
+    return DirAutopick(
+        enabled=enabled,
+        sample_n=sample_n,
+        top_k=top_k,
+        top_db_max=top_db_max,
+        refresh_top=refresh_top,
+    )
 
 
 def _parse_plan(obj: Any) -> DirPlan:
@@ -156,13 +164,15 @@ def _parse_plan(obj: Any) -> DirPlan:
     if not isinstance(note, str):
         raise DirPipelineSpecError("dir pipeline spec: plan.note deve essere string")
     sc = obj.get("stream_codecs")
-    sc_out: Optional[Dict[str, str]] = None
+    sc_out: dict[str, str] | None = None
     if sc is not None:
         _expect_type("plan.stream_codecs", sc, dict)
         sc_out = {}
         for k, v in sc.items():
             if not isinstance(k, str) or not isinstance(v, str):
-                raise DirPipelineSpecError("dir pipeline spec: stream_codecs deve essere mappa string->string")
+                raise DirPipelineSpecError(
+                    "dir pipeline spec: stream_codecs deve essere mappa string->string"
+                )
             k2 = k.strip().upper()
             if k2 not in _STREAM_NAME_TO_KEY:
                 raise DirPipelineSpecError(f"dir pipeline spec: stream name non supportato: {k}")
@@ -172,21 +182,23 @@ def _parse_plan(obj: Any) -> DirPlan:
     return DirPlan(layer=layer.strip(), codec=codec.strip(), stream_codecs=sc_out, note=note)
 
 
-def _parse_candidate_pools(v: Any) -> Dict[str, List[DirPlan]]:
+def _parse_candidate_pools(v: Any) -> dict[str, list[DirPlan]]:
     if v is None:
         return {}
     _expect_type("candidate_pools", v, dict)
-    pools: Dict[str, List[DirPlan]] = {}
+    pools: dict[str, list[DirPlan]] = {}
     for bt, lst in v.items():
         if not isinstance(bt, str) or not bt.strip():
-            raise DirPipelineSpecError("dir pipeline spec: candidate_pools keys devono essere string")
+            raise DirPipelineSpecError(
+                "dir pipeline spec: candidate_pools keys devono essere string"
+            )
         _expect_type(f"candidate_pools[{bt}]", lst, list)
         plans = [_parse_plan(x) for x in lst]
         pools[bt.strip()] = plans
     return pools
 
 
-def _parse_resources(v: Any) -> Tuple[DirResourceNumDictV1, DirResourceTplDictV0]:
+def _parse_resources(v: Any) -> tuple[DirResourceNumDictV1, DirResourceTplDictV0]:
     if v is None:
         return DirResourceNumDictV1(), DirResourceTplDictV0()
     _expect_type("resources", v, dict)
@@ -204,7 +216,9 @@ def _parse_resources(v: Any) -> Tuple[DirResourceNumDictV1, DirResourceTplDictV0
         if k is not None:
             _expect_type("resources.num_dict_v1.k", k, int)
             if k < 0:
-                raise DirPipelineSpecError("dir pipeline spec: resources.num_dict_v1.k deve essere >= 0")
+                raise DirPipelineSpecError(
+                    "dir pipeline spec: resources.num_dict_v1.k deve essere >= 0"
+                )
         nd_out = DirResourceNumDictV1(enabled=enabled, k=k)
 
     # tpl_dict_v0
@@ -220,7 +234,9 @@ def _parse_resources(v: Any) -> Tuple[DirResourceNumDictV1, DirResourceTplDictV0
         if k is not None:
             _expect_type("resources.tpl_dict_v0.k", k, int)
             if k < 0:
-                raise DirPipelineSpecError("dir pipeline spec: resources.tpl_dict_v0.k deve essere >= 0")
+                raise DirPipelineSpecError(
+                    "dir pipeline spec: resources.tpl_dict_v0.k deve essere >= 0"
+                )
         td_out = DirResourceTplDictV0(enabled=enabled, k=k)
 
     return nd_out, td_out
@@ -234,7 +250,9 @@ def load_dir_pipeline_spec(arg: str) -> DirPipelineSpec:
     except Exception as e:
         raise DirPipelineSpecError(f"dir pipeline spec: JSON invalido: {e}") from e
     _expect_type("root", obj, dict)
-    _ensure_allowed_keys("root", obj, ["spec", "buckets", "archive", "autopick", "candidate_pools", "resources"])
+    _ensure_allowed_keys(
+        "root", obj, ["spec", "buckets", "archive", "autopick", "candidate_pools", "resources"]
+    )
 
     spec = obj.get("spec")
     if spec != SCHEMA_ID:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-from gcc_ocf.core.num_stream import encode_ints, decode_ints
+from gcc_ocf.core.num_stream import decode_ints, encode_ints
 
 
 def _enc_varint(x: int) -> bytes:
@@ -21,7 +21,7 @@ def _enc_varint(x: int) -> bytes:
     return bytes(out)
 
 
-def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
+def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
     b = bytes(buf)
@@ -39,7 +39,7 @@ def _dec_varint(buf: bytes, idx: int) -> Tuple[int, int]:
     return x, idx
 
 
-def _pack_templates(templates: List[List[bytes]]) -> bytes:
+def _pack_templates(templates: list[list[bytes]]) -> bytes:
     """TPL stream raw format (v0):
 
     [n_templates(varint)]
@@ -59,18 +59,18 @@ def _pack_templates(templates: List[List[bytes]]) -> bytes:
     return bytes(out)
 
 
-def _unpack_templates(raw: bytes) -> List[List[bytes]]:
+def _unpack_templates(raw: bytes) -> list[list[bytes]]:
     b = bytes(raw)
     idx = 0
     n, idx = _dec_varint(b, idx)
     if n > 1_000_000:
         raise ValueError("tpl_lines_v0: troppi template (sanity)")
-    out: List[List[bytes]] = []
+    out: list[list[bytes]] = []
     for _ in range(n):
         n_chunks, idx = _dec_varint(b, idx)
         if n_chunks < 1 or n_chunks > 1_000_000:
             raise ValueError("tpl_lines_v0: n_chunks invalido")
-        chunks: List[bytes] = []
+        chunks: list[bytes] = []
         for _j in range(n_chunks):
             ln, idx = _dec_varint(b, idx)
             if idx + ln > len(b):
@@ -115,12 +115,12 @@ class LayerTplLinesV0:
     FMT_VERSION = 1
     TOK_RULES = 1
 
-    def pack_meta(self, meta: Dict[str, Any]) -> bytes:
+    def pack_meta(self, meta: dict[str, Any]) -> bytes:
         fmt = int(meta.get("fmt", self.FMT_VERSION)) & 0xFF
         tok = int(meta.get("tok", self.TOK_RULES)) & 0xFF
         return bytes([fmt, tok])
 
-    def unpack_meta(self, meta_bytes: bytes) -> Dict[str, Any]:
+    def unpack_meta(self, meta_bytes: bytes) -> dict[str, Any]:
         b = bytes(meta_bytes)
         if not b:
             return {}
@@ -144,7 +144,7 @@ class LayerTplLinesV0:
             return True
         return False
 
-    def _split_line(self, line: bytes) -> Tuple[List[bytes], List[Tuple[int, int, int]]]:
+    def _split_line(self, line: bytes) -> tuple[list[bytes], list[tuple[int, int, int]]]:
         """Return (chunks, nums_meta) for a single line.
 
         chunks length = n_nums + 1.
@@ -154,8 +154,8 @@ class LayerTplLinesV0:
         n = len(b)
         i = 0
         last = 0
-        chunks: List[bytes] = []
-        nums_meta: List[Tuple[int, int, int]] = []
+        chunks: list[bytes] = []
+        nums_meta: list[tuple[int, int, int]] = []
 
         while i < n:
             c = b[i]
@@ -163,7 +163,12 @@ class LayerTplLinesV0:
             sign_code = self.SIGN_NONE
             j = i
 
-            if c in (43, 45) and (i + 1) < n and self._is_digit(b[i + 1]) and self._is_unary_sign(b, i):
+            if (
+                c in (43, 45)
+                and (i + 1) < n
+                and self._is_digit(b[i + 1])
+                and self._is_unary_sign(b, i)
+            ):
                 start = i
                 sign_code = self.SIGN_PLUS if c == 43 else self.SIGN_MINUS
                 j = i + 1
@@ -199,7 +204,7 @@ class LayerTplLinesV0:
         chunks.append(b[last:])
         return chunks, nums_meta
 
-    def encode(self, data: bytes) -> Tuple[Tuple[bytes, bytes, bytes], Dict[str, Any]]:
+    def encode(self, data: bytes) -> tuple[tuple[bytes, bytes, bytes], dict[str, Any]]:
         b = bytes(data)
         lines = b.splitlines(keepends=True)
 
@@ -208,13 +213,17 @@ class LayerTplLinesV0:
             tpl_raw = _pack_templates([[b""]])
             ids_raw = encode_ints([0])  # 1 "line" placeholder
             nums_raw = encode_ints([1, 0])  # n_lines=1, n_nums=0
-            return (tpl_raw, ids_raw, nums_raw), {"fmt": self.FMT_VERSION, "tok": self.TOK_RULES, "empty": True}
+            return (tpl_raw, ids_raw, nums_raw), {
+                "fmt": self.FMT_VERSION,
+                "tok": self.TOK_RULES,
+                "empty": True,
+            }
 
-        templates: List[List[bytes]] = []
-        tpl_index: Dict[Tuple[bytes, ...], int] = {}
+        templates: list[list[bytes]] = []
+        tpl_index: dict[tuple[bytes, ...], int] = {}
 
-        ids: List[int] = []
-        nums_ints: List[int] = []
+        ids: list[int] = []
+        nums_ints: list[int] = []
         nums_ints.append(len(lines))
 
         for line in lines:
@@ -237,7 +246,7 @@ class LayerTplLinesV0:
 
         return (tpl_raw, ids_raw, nums_raw), {"fmt": self.FMT_VERSION, "tok": self.TOK_RULES}
 
-    def decode(self, symbols: Tuple[bytes, bytes, bytes], layer_meta: Dict[str, Any]) -> bytes:
+    def decode(self, symbols: tuple[bytes, bytes, bytes], layer_meta: dict[str, Any]) -> bytes:
         if not (isinstance(symbols, tuple) and len(symbols) == 3):
             raise ValueError("tpl_lines_v0: symbols attesi: (TPL, IDS, NUMS)")
         tpl_raw, ids_raw, nums_raw = symbols
@@ -275,7 +284,9 @@ class LayerTplLinesV0:
             chunks = templates[tid]
             expected = max(0, len(chunks) - 1)
             if n_nums != expected:
-                raise ValueError(f"tpl_lines_v0: n_nums mismatch (got={n_nums} expected={expected})")
+                raise ValueError(
+                    f"tpl_lines_v0: n_nums mismatch (got={n_nums} expected={expected})"
+                )
 
             out += chunks[0]
             for ni in range(n_nums):
