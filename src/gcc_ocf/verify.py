@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,176 @@ from gcc_ocf.errors import (
 )
 
 CHUNK_SIZE_DEFAULT = 256 * 1024
+
+
+def _is_sha256_hex(s: str) -> bool:
+    ss = s.strip().lower()
+    return len(ss) == 64 and all(c in "0123456789abcdef" for c in ss)
+
+
+def _as_int(v: Any, *, where: str) -> int:
+    try:
+        return int(v)
+    except Exception as err:
+        raise CorruptPayload(where) from err
+
+
+@dataclass(frozen=True)
+class _GCATrailer:
+    index_body_sha256: str | None
+
+
+@dataclass(frozen=True)
+class _GCAIndexEntry:
+    kind: str
+    rel: str
+    offset: int
+    length: int
+    blob_sha256: str | None
+    blob_crc32: int | None
+
+
+@dataclass(frozen=True)
+class _ManifestFileRec:
+    rel: str
+    archive: str | None
+    bucket: int
+    archive_offset: int
+    archive_length: int
+    blob_sha256: str | None
+
+
+@dataclass(frozen=True)
+class _BucketSummary:
+    bucket: int
+    bucket_resources: list[str]
+    bucket_resources_meta: dict[str, dict[str, Any]]
+
+
+def _parse_gca_trailer(idx_raw: bytes) -> _GCATrailer | None:
+    if not idx_raw:
+        return None
+    lines = idx_raw.splitlines(keepends=True)
+    if not lines:
+        return None
+    last_line = lines[-1]
+    try:
+        last = json.loads(last_line.decode("utf-8").strip())
+    except Exception:
+        return None
+    if not isinstance(last, dict) or str(last.get("kind")) != "trailer":
+        return None
+    sha = last.get("index_body_sha256")
+    if sha is None:
+        return _GCATrailer(index_body_sha256=None)
+    if not isinstance(sha, str) or not sha.strip():
+        raise CorruptPayload("GCA trailer index_body_sha256 malformato")
+    if not _is_sha256_hex(sha):
+        raise CorruptPayload("GCA trailer index_body_sha256 non-hex")
+    return _GCATrailer(index_body_sha256=sha.strip().lower())
+
+
+def _parse_gca_index_entry(e: Any) -> _GCAIndexEntry | None:
+    if not isinstance(e, dict):
+        return None
+
+    # Normal entries do NOT have a "kind" field (writer emits rel/offset/length + meta).
+    # Only special records (resources, trailer) set it.
+    kind = str(e.get("kind") or "entry")
+
+    if kind == "trailer":
+        return _GCAIndexEntry(
+            kind=kind,
+            rel="",
+            offset=0,
+            length=0,
+            blob_sha256=None,
+            blob_crc32=None,
+        )
+
+    rel = str(e.get("rel") or "")
+    off = _as_int(e.get("offset") or 0, where=f"GCA offset malformato per {rel}")
+    ln = _as_int(e.get("length") or 0, where=f"GCA length malformato per {rel}")
+
+    sha = e.get("blob_sha256")
+    blob_sha = None
+    if sha is not None:
+        if not isinstance(sha, str):
+            raise CorruptPayload(f"GCA blob_sha256 malformato per {rel}")
+        if sha.strip():
+            if not _is_sha256_hex(sha):
+                raise CorruptPayload(f"GCA blob_sha256 malformato per {rel}")
+            blob_sha = sha.strip().lower()
+
+    crc = e.get("blob_crc32")
+    blob_crc = None
+    if crc is not None:
+        blob_crc = _as_int(crc, where=f"GCA blob_crc32 malformato per {rel}")
+
+    return _GCAIndexEntry(
+        kind=kind,
+        rel=rel,
+        offset=off,
+        length=ln,
+        blob_sha256=blob_sha,
+        blob_crc32=blob_crc,
+    )
+
+
+def _parse_bucket_summary(rec: dict[str, Any]) -> _BucketSummary | None:
+    if rec.get("kind") != "bucket_summary":
+        return None
+    b = _as_int(rec.get("bucket") or 0, where="bucket_summary.bucket malformato")
+    declared = rec.get("bucket_resources")
+    if declared is None:
+        declared_list: list[str] = []
+    elif isinstance(declared, list):
+        declared_list = [str(x) for x in declared if str(x)]
+    else:
+        raise CorruptPayload("bucket_summary.bucket_resources malformato")
+
+    meta = rec.get("bucket_resources_meta")
+    if meta is None:
+        meta_map: dict[str, dict[str, Any]] = {}
+    elif isinstance(meta, dict):
+        meta_map = {str(k): (v if isinstance(v, dict) else {}) for k, v in meta.items()}
+    else:
+        raise CorruptPayload("bucket_summary.bucket_resources_meta malformato")
+
+    return _BucketSummary(bucket=b, bucket_resources=declared_list, bucket_resources_meta=meta_map)
+
+
+def _parse_manifest_file_rec(rec: dict[str, Any]) -> _ManifestFileRec | None:
+    # Ignore errors and non-file records.
+    rel = rec.get("rel")
+    if not rel or "error" in rec:
+        return None
+
+    r = str(rel)
+    arch = rec.get("archive")
+    a = str(arch) if arch else None
+    bucket = _as_int(rec.get("bucket") or 0, where=f"manifest.bucket malformato per {r}")
+    off = _as_int(rec.get("archive_offset") or 0, where=f"manifest.archive_offset malformato per {r}")
+    ln = _as_int(rec.get("archive_length") or 0, where=f"manifest.archive_length malformato per {r}")
+
+    sha = rec.get("blob_sha256")
+    blob_sha = None
+    if sha is not None:
+        if not isinstance(sha, str):
+            raise CorruptPayload(f"manifest.blob_sha256 malformato per {r}")
+        if sha.strip():
+            if not _is_sha256_hex(sha):
+                raise CorruptPayload(f"manifest.blob_sha256 malformato per {r}")
+            blob_sha = sha.strip().lower()
+
+    return _ManifestFileRec(
+        rel=r,
+        archive=a,
+        bucket=bucket,
+        archive_offset=off,
+        archive_length=ln,
+        blob_sha256=blob_sha,
+    )
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -58,103 +229,59 @@ def _iter_manifest_records(manifest_path: Path) -> Iterator[dict[str, Any]]:
 
 
 def verify_gca(path: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_DEFAULT) -> None:
-    """Verify a single GCA1 archive.
-
-    Light:
-      - CRC ok (done by GCAReader)
-      - if an entry has blob_sha256, ensure it looks like a sha256 hex
-      - validate index trailer if present
-
-    Full:
-      - recompute sha256 for each entry with offset/length and compare to blob_sha256
-    """
+    """Verify a single GCA1 archive."""
     p = Path(path)
     if not p.is_file():
         raise CorruptPayload(f"GCA non trovato: {p}")
 
     with GCAReader(p) as rd:
         idx_raw = rd.index_raw()
-        idx = list(rd.iter_index())
+        trailer = _parse_gca_trailer(idx_raw)
 
-        # Validate trailer record if present
-        if idx_raw:
+        if trailer and trailer.index_body_sha256:
             lines = idx_raw.splitlines(keepends=True)
-            if lines:
-                last_line = lines[-1]
-                try:
-                    last = json.loads(last_line.decode("utf-8").strip())
-                except Exception:
-                    last = None
-                if isinstance(last, dict) and str(last.get("kind")) == "trailer":
-                    body = b"".join(lines[:-1])
-                    body_sha = hashlib.sha256(body).hexdigest()
-                    exp = str(last.get("index_body_sha256") or "")
-                    if exp and exp != body_sha:
-                        raise HashMismatch(f"GCA index_body_sha256 mismatch: {p.name}")
+            body = b"".join(lines[:-1])
+            body_sha = hashlib.sha256(body).hexdigest()
+            if trailer.index_body_sha256 != body_sha:
+                raise HashMismatch(f"GCA index_body_sha256 mismatch: {p.name}")
 
-        # Verify entry hashes
-        for e in idx:
-            if not isinstance(e, dict):
+        for raw in rd.iter_index():
+            e = _parse_gca_index_entry(raw)
+            if e is None or e.kind == "trailer":
                 continue
-            if str(e.get("kind")) == "trailer":
+            if e.length <= 0:
                 continue
-            rel = str(e.get("rel") or "")
-            off = int(e.get("offset") or 0)
-            ln = int(e.get("length") or 0)
-            if ln <= 0:
-                continue
-            exp = str(e.get("blob_sha256") or "")
-            if exp and (len(exp) != 64 or any(c not in "0123456789abcdef" for c in exp.lower())):
-                raise CorruptPayload(f"GCA blob_sha256 malformato per {rel}")
-            exp_crc = e.get("blob_crc32")
-            if exp_crc is not None:
-                try:
-                    _ = int(exp_crc)
-                except Exception as err:
-                    raise CorruptPayload(f"GCA blob_crc32 malformato per {rel}") from err
+
             if full:
-                got, got_crc = rd.sha256_crc32_blob(off, ln, chunk_size=chunk_size)
-                exp_crc = e.get("blob_crc32")
-                if exp and got != exp:
-                    raise HashMismatch(f"GCA blob hash mismatch per {rel}")
-                if exp_crc is not None:
-                    try:
-                        exp_crc_i = int(exp_crc)
-                    except Exception as err:
-                        raise CorruptPayload(f"GCA blob_crc32 malformato per {rel}") from err
-                    if int(got_crc) != exp_crc_i:
-                        raise HashMismatch(f"GCA blob CRC mismatch per {rel}")
+                got, got_crc = rd.sha256_crc32_blob(e.offset, e.length, chunk_size=chunk_size)
+                if e.blob_sha256 and got != e.blob_sha256:
+                    raise HashMismatch(f"GCA blob hash mismatch per {e.rel}")
+                if e.blob_crc32 is not None and int(got_crc) != int(e.blob_crc32):
+                    raise HashMismatch(f"GCA blob CRC mismatch per {e.rel}")
 
 
 def verify_packed_dir(
     output_dir: Path, *, full: bool = False, chunk_size: int = CHUNK_SIZE_DEFAULT
 ) -> None:
-    """Verify a packed directory (manifest + GCA1 archives)."""
     out = Path(output_dir)
     manifest = out / "manifest.jsonl"
     if not manifest.is_file():
         raise CorruptPayload(f"manifest non trovato: {manifest}")
 
-    # Collect file records + bucket summaries
-    file_recs: list[dict[str, Any]] = []
-    needed_archives: dict[str, list[dict[str, Any]]] = {}
-    bucket_summaries: dict[int, dict[str, Any]] = {}
+    needed_archives: dict[str, list[_ManifestFileRec]] = {}
+    bucket_summaries: dict[int, _BucketSummary] = {}
 
     for rec in _iter_manifest_records(manifest):
-        if rec.get("kind") == "bucket_summary":
-            try:
-                b = int(rec.get("bucket") or 0)
-                bucket_summaries[b] = rec
-            except Exception:
-                pass
+        bs = _parse_bucket_summary(rec)
+        if bs is not None:
+            bucket_summaries[bs.bucket] = bs
             continue
-        rel = rec.get("rel")
-        if not rel or "error" in rec:
+
+        fr = _parse_manifest_file_rec(rec)
+        if fr is None:
             continue
-        file_recs.append(rec)
-        arch = rec.get("archive")
-        if arch:
-            needed_archives.setdefault(str(arch), []).append(rec)
+        if fr.archive:
+            needed_archives.setdefault(fr.archive, []).append(fr)
 
     # Verify each archive (index/trailer + optional full hashes)
     for arch in sorted(needed_archives.keys()):
@@ -164,102 +291,85 @@ def verify_packed_dir(
     for arch, recs in needed_archives.items():
         p = out / arch
         with GCAReader(p) as rd:
-            idx = list(rd.iter_index())
-            by_rel: dict[str, dict[str, Any]] = {}
-            for e in idx:
-                if not isinstance(e, dict) or str(e.get("kind")) == "trailer":
+            by_rel: dict[str, _GCAIndexEntry] = {}
+            by_offlen: dict[tuple[int, int], _GCAIndexEntry] = {}
+
+            for raw in rd.iter_index():
+                e = _parse_gca_index_entry(raw)
+                if e is None or e.kind == "trailer":
                     continue
-                r = str(e.get("rel") or "")
-                if r:
-                    by_rel[r] = e
+                if e.rel:
+                    by_rel[e.rel] = e
+                by_offlen[(e.offset, e.length)] = e
 
             for rec in recs:
-                r = str(rec.get("rel") or "")
-                if r not in by_rel:
-                    raise CorruptPayload(f"manifest punta a entry mancante in {arch}: {r}")
-                e = by_rel[r]
-                exp = str(e.get("blob_sha256") or "")
-                man_blob_sha = str(rec.get("blob_sha256") or "")
-                if man_blob_sha and exp and man_blob_sha != exp:
-                    raise HashMismatch(f"manifest/blob_sha256 mismatch: {r}")
+                e = by_rel.get(rec.rel)
+
+                if e is None:
+                    # some writers prefix rel (e.g. "files/a.txt") -> suffix match if unique
+                    suffix = "/" + rec.rel
+                    candidates = [ee for rr, ee in by_rel.items() if rr.endswith(suffix)]
+                    if len(candidates) == 1:
+                        e = candidates[0]
+
+                if e is None:
+                    # authoritative: offset/length match
+                    e = by_offlen.get((rec.archive_offset, rec.archive_length))
+
+                if e is None:
+                    raise CorruptPayload(f"manifest punta a entry mancante in {arch}: {rec.rel}")
+
+                # If both provide sha, they must agree
+                if rec.blob_sha256 and e.blob_sha256 and rec.blob_sha256 != e.blob_sha256:
+                    raise HashMismatch(f"manifest/blob_sha256 mismatch: {rec.rel}")
+
                 if full:
-                    off = int(rec.get("archive_offset") or 0)
-                    ln = int(rec.get("archive_length") or 0)
-                    got, got_crc = rd.sha256_crc32_blob(off, ln, chunk_size=chunk_size)
-                    exp_crc = e.get("blob_crc32")
-                    if exp and got != exp:
-                        raise HashMismatch(f"blob hash mismatch: {r}")
-                    if exp_crc is not None:
-                        try:
-                            exp_crc_i = int(exp_crc)
-                        except Exception as err:
-                            raise CorruptPayload(f"GCA blob_crc32 malformato per {r}") from err
-                        if int(got_crc) != exp_crc_i:
-                            raise HashMismatch(f"blob CRC mismatch: {r}")
+                    got, got_crc = rd.sha256_crc32_blob(
+                        rec.archive_offset, rec.archive_length, chunk_size=chunk_size
+                    )
+                    if e.blob_sha256 and got != e.blob_sha256:
+                        raise HashMismatch(f"blob hash mismatch: {rec.rel}")
+                    if e.blob_crc32 is not None and int(got_crc) != int(e.blob_crc32):
+                        raise HashMismatch(f"blob CRC mismatch: {rec.rel}")
 
             # Resource checks (from bucket_summary)
-            # Determine buckets that map to this archive.
-            buckets_here = {int(rr.get("bucket") or 0) for rr in recs}
+            buckets_here = {rr.bucket for rr in recs}
             if buckets_here:
                 res = rd.load_resources()
                 for b in sorted(buckets_here):
-                    bs = bucket_summaries.get(b) or {}
-                    declared = (bs.get("bucket_resources") or []) if isinstance(bs, dict) else []
-                    meta_map = (
-                        (bs.get("bucket_resources_meta") or {}) if isinstance(bs, dict) else {}
-                    )
-                    for name in declared:
+                    bs = bucket_summaries.get(b)
+                    if bs is None:
+                        continue
+                    for name in bs.bucket_resources:
                         if name not in res:
                             raise MissingResource(
                                 f"resource mancante in {arch}: bucket={b} name={name}"
                             )
-                        exp_sha = str((meta_map.get(name) or {}).get("blob_sha256") or "")
-                        got_sha = str(
-                            (res.get(name) or {}).get("meta", {}).get("blob_sha256") or ""
+                        exp_sha = str(
+                            (bs.bucket_resources_meta.get(name) or {}).get("blob_sha256") or ""
                         )
+                        got_sha = str((res.get(name) or {}).get("meta", {}).get("blob_sha256") or "")
                         if exp_sha and got_sha and exp_sha != got_sha:
                             raise HashMismatch(f"resource sha mismatch: {arch} {name}")
-                        if full and exp_sha:
-                            # recompute
-                            # find entry in index
-                            for e in idx:
-                                if isinstance(e, dict) and (
-                                    str(e.get("rel") or "") in (f"__res__/{name}",)
-                                ):
-                                    off = int(e.get("offset") or 0)
-                                    ln = int(e.get("length") or 0)
-                                    if ln > 0:
-                                        recomputed, recomputed_crc = rd.sha256_crc32_blob(
-                                            off, ln, chunk_size=chunk_size
-                                        )
-                                        if recomputed != exp_sha:
-                                            raise HashMismatch(
-                                                f"resource blob hash mismatch: {arch} {name}"
-                                            )
-                                        exp_crc = e.get("blob_crc32")
-                                        if exp_crc is not None:
-                                            try:
-                                                exp_crc_i = int(exp_crc)
-                                            except Exception as err:
-                                                raise CorruptPayload(
-                                                    f"GCA blob_crc32 malformato per resource {name}"
-                                                ) from err
-                                            if int(recomputed_crc) != exp_crc_i:
-                                                raise HashMismatch(
-                                                    f"resource blob CRC mismatch: {arch} {name}"
-                                                )
 
-                                    break
+                        if full and exp_sha:
+                            res_rel = f"__res__/{name}"
+                            e = by_rel.get(res_rel)
+                            if e is None:
+                                # fallback: some writers may store resource rel differently; off/len not known here
+                                raise CorruptPayload(f"resource entry mancante in {arch}: {res_rel}")
+
+                            if e.length > 0:
+                                recomputed, recomputed_crc = rd.sha256_crc32_blob(
+                                    e.offset, e.length, chunk_size=chunk_size
+                                )
+                                if recomputed != exp_sha:
+                                    raise HashMismatch(f"resource blob hash mismatch: {arch} {name}")
+                                if e.blob_crc32 is not None and int(recomputed_crc) != int(e.blob_crc32):
+                                    raise HashMismatch(f"resource blob CRC mismatch: {arch} {name}")
 
 
 def verify_container_file(path: Path, *, full: bool = False) -> None:
-    """Verify a single container file.
-
-    Light:
-      - parse v6 header
-    Full:
-      - attempt full decode (lossless) via legacy universal decoder
-    """
     p = Path(path)
     if not p.is_file():
         raise CorruptPayload(f"file non trovato: {p}")
@@ -275,7 +385,6 @@ def verify_container_file(path: Path, *, full: bool = False) -> None:
         raise CorruptPayload(msg) from err
 
     if full:
-        # Use universal decoder for deeper validation.
         from gcc_ocf.engine.container import Engine
         from gcc_ocf.engine.container_v6 import decompress_v6
 

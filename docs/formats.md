@@ -4,7 +4,7 @@ Ultimo aggiornamento: 2026-01-12
 
 Questo repo contiene **formati legacy (v1–v4)** e un **container v5** che generalizza layer+codec.
 
-> Nota: qui descrivo **cosa** c’è e **come è inteso**. I dettagli byte-per-byte vivono nel codice (`src/python/engine/container.py`, `src/python/core/legacy_payloads.py`, `src/python/core/huffman_bundle.py`).
+> Nota: qui descrivo **cosa** c’è e **come è inteso**. I dettagli byte-per-byte vivono nel codice (`src/gcc_ocf/engine/container_v6.py`, `src/gcc_ocf/core/legacy_payloads.py`, `src/gcc_ocf/core/huffman_bundle.py`, `src/gcc_ocf/core/mbn_bundle.py`).
 
 ## Concetti base
 
