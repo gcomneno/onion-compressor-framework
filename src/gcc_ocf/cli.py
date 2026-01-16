@@ -11,11 +11,20 @@ from __future__ import annotations
 
 import argparse
 import sys
+from importlib import metadata
 from pathlib import Path
 
 from gcc_ocf.dir_pipeline_spec import DirPipelineSpecError, load_dir_pipeline_spec
 from gcc_ocf.errors import GCCOCFError
 from gcc_ocf.pipeline_spec import PipelineSpecError, load_pipeline_spec
+
+
+def _pkg_version() -> str:
+    try:
+        return metadata.version("gcc-ocf")
+    except metadata.PackageNotFoundError:
+        # running from source without installed metadata (e.g. python -m ...)
+        return "0.0.0+dev"
 
 
 def _add_common_args(p: argparse.ArgumentParser) -> None:
@@ -197,6 +206,12 @@ def _semantic_dir_unpack(input_dir: Path, restore_dir: Path) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="gcc-ocf", description="GCC Onion Compressor Framework (GCC-OCF)"
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"gcc-ocf {_pkg_version()}",
+        help="Show version and exit",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
