@@ -1,13 +1,20 @@
 # Exit codes
+> GENERATED FILE — do not edit manually.
+> Source of truth: `src/gcc_ocf/errors.py` (EXIT_CODES).
+> Regenerate: `python scripts/gen_exit_codes_md.py`.
 
 These are the CLI exit codes you can rely on.
 
-- **0**: success
-- **2**: usage/config error (e.g. invalid pipeline spec JSON)
-- **10**: generic failure (unexpected error, corrupt payload, unsupported version, etc.)
-- **13**: integrity failure (**HashMismatch**) — used by verify full/light when hashes/CRCs don't match
+| Code | Name | Meaning |
+|---:|---|---|
+| 0 | `OK` | Success |
+| 2 | `USAGE` | Usage/config error (invalid args, invalid pipeline spec, etc.) |
+| 10 | `GENERIC` | Generic failure (corrupt payload, unexpected error, etc.) |
+| 11 | `UNSUPPORTED_VERSION` | Unsupported container/archive version |
+| 12 | `MISSING_RESOURCE` | Missing required resource (e.g. bucket-level dict) |
+| 13 | `HASH_MISMATCH` | Integrity failure (hash/CRC mismatch, tamper detected) |
 
-Notes:
+## Notes
 - Most internal errors extend `GCCOCFError` and carry an `exit_code`.
 - `--debug` re-raises errors to show full stack traces.
 - `--json` on `verify` prints a JSON object to stdout (ok) or stderr (error), and returns the same exit code.
