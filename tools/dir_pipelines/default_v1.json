@@ -1,0 +1,34 @@
+{
+  "spec": "gcc-ocf.dir_pipeline.v1",
+  "buckets": 16,
+  "archive": true,
+  "autopick": {
+    "enabled": true,
+    "sample_n": 3,
+    "top_k": 2,
+    "top_db_max": 12,
+    "refresh_top": false
+  },
+  "candidate_pools": {
+    "binaryish": [
+      {"layer": "bytes", "codec": "zstd_tight", "note": "bytes+zstd_tight (fallback zlib)"},
+      {"layer": "bytes", "codec": "zlib", "note": "bytes+zlib"}
+    ],
+    "textish": [
+      {"layer": "bytes", "codec": "zstd_tight", "note": "bytes+zstd_tight (fallback zlib)"},
+      {"layer": "vc0", "codec": "zstd_tight", "note": "vc0+zstd_tight (fallback zlib)"},
+      {"layer": "split_text_nums", "codec": "zstd_tight", "stream_codecs": {"TEXT": "zstd_tight", "NUMS": "num_v1"}},
+      {"layer": "tpl_lines_shared_v0", "codec": "zstd_tight", "stream_codecs": {"TPL": "zstd_tight", "IDS": "num_v1", "NUMS": "num_v1"}},
+      {"layer": "tpl_lines_v0", "codec": "zstd_tight", "stream_codecs": {"TPL": "zstd_tight", "IDS": "num_v1", "NUMS": "num_v1"}}
+    ],
+    "mixed_text_nums": [
+      {"layer": "tpl_lines_shared_v0", "codec": "zstd_tight", "stream_codecs": {"TPL": "zstd_tight", "IDS": "num_v1", "NUMS": "num_v1"}},
+      {"layer": "tpl_lines_v0", "codec": "zstd_tight", "stream_codecs": {"TPL": "zstd_tight", "IDS": "num_v1", "NUMS": "num_v1"}},
+      {"layer": "split_text_nums", "codec": "zstd_tight", "stream_codecs": {"TEXT": "zstd_tight", "NUMS": "num_v1"}}
+    ]
+  },
+  "resources": {
+    "num_dict_v1": {"enabled": true, "k": 64},
+    "tpl_dict_v0": {"enabled": true, "k": 128}
+  }
+}

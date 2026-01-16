@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtualenv
+.venv/
+venv/
+
+# Test/bench artifacts
+bench_out/
+*.gcc
+*.gca
+*.jsonl.zlib
+/tmp/
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Project-specific caches
+tools/top_pipelines.json

@@ -1,0 +1,6 @@
+{
+  "spec": "gcc-ocf.pipeline.v1",
+  "name": "bytes+zlib",
+  "layer": "bytes",
+  "codec": "zlib"
+}

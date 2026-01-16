@@ -1,0 +1,72 @@
+Questo è un file di test di dimensioni leggermente maggiori, pensato per mettere
+alla prova i vari strati della nostra huffman-compressor. L’idea è avere un testo
+abbastanza lungo da rendere visibili i compromessi tra header pesanti,
+pre-processing linguistico e reale guadagno in termini di bit per simbolo.
+
+In un compressore tradizionale, il testo viene spesso visto come una semplice
+sequenza di byte. Alcuni algoritmi usano modelli statistici basati sulla frequenza
+dei simboli, altri sfruttano la ridondanza locale con meccanismi simili a LZ77 o LZ78.
+Nel nostro progetto, invece, vogliamo vedere che cosa succede quando smettiamo di
+pensare in termini di byte e cominciamo a ragionare in termini di struttura linguistica.
+
+Lo strato più semplice della huffman è lo step a byte, dove applichiamo Huffman
+direttamente sui valori da 0 a 255. È una baseline utile, perché ci dice quanto
+riusciamo a comprimere senza alcuna informazione sulla lingua. Subito sopra troviamo
+lo strato delle vocali e consonanti, dove separiamo il testo in tre flussi:
+una maschera che indica se ogni carattere è vocale, consonante o altro, uno stream
+dedicato alle vocali e uno alle consonanti e ai simboli rimanenti.
+
+A livello teorico, la struttura V/C/O potrebbe permettere di sfruttare meglio la
+regolarità delle sequenze italiane, dove spesso incontriamo pattern come consonante,
+vocale, consonante, vocale, e così via. Nella pratica, però, questo vantaggio va
+confrontato con il costo di tre header separati, ciascuno con la propria tabella
+di frequenze. È il classico esempio di modello "più intelligente" che rischia di
+mangiarsi tutto il guadagno in metadati.
+
+Un ulteriore strato è quello delle pseudo-sillabe. In questo approccio, il testo
+viene suddiviso in sequenze di lettere e sequenze di non-lettere. Le sequenze di
+lettere vengono poi spezzate in sillabe approssimative, tagliando dopo ogni vocale.
+Il risultato non è foneticamente perfetto, ma è sufficiente per creare un vocabolario
+di "pezzi di parola" che potrebbero ripetersi spesso, soprattutto in presenza di
+suffissi e prefissi ricorrenti.
+
+Ancora più in alto troviamo il livello delle parole intere. Qui le sequenze di lettere
+vengono trattate come token indivisibili, mentre gli spazi, la punteggiatura e gli altri
+simboli vengono conservati come blocchi separati. Questo tipo di tokenizzazione rende
+visibile la distribuzione delle parole nel testo, che di solito segue una legge di Zipf:
+pochissime parole molto frequenti, molte parole mediamente comuni e una coda lunga di
+termini rari. È interessante vedere come Huffman si comporta quando i simboli non sono più
+singoli caratteri, ma parole complete.
+
+In un futuro step, ancora solo teorico, vorremmo scendere sotto la superficie delle
+forme scritte e lavorare con i lemmi. Invece di memorizzare "andavamo" e "andremo"
+come due parole diverse, potremmo usare un lemma comune, "andare", e associare a
+ciascuna occorrenza un tag morfologico che descriva tempo, persona e numero. Questo
+approccio potrebbe portare a una rappresentazione più compatta per testi molto
+flessivi, ma richiede l’uso di lemmatizzatori e modelli morfologici affidabili.
+
+Per ora, questo file medium.txt esiste soprattutto per fare esperimenti comparativi.
+Puoi provare a comprimerlo con i vari step:
+
+- v1: compressione a byte,
+- v2: separazione V/C/O,
+- v3: pseudo-sillabe,
+- v4: parole intere,
+
+e osservare come cambiano le dimensioni dei file generati, il rapporto di compressione
+e il numero di bit per simbolo. Probabilmente scoprirai che, almeno in questa fase,
+gli header pesano parecchio e i risultati non sono ancora "competitivi". Ma va bene così:
+lo scopo di huffman-compressor è soprattutto esplorare, misurare e imparare.
+
+Se un giorno questo file dovesse diventare troppo corto per i tuoi esperimenti, puoi
+sempre aggiungere altre sezioni, magari con testi di stile diverso: dialoghi, descrizioni
+tecniche, narrativo, elenchi puntati. Osservare come reagiscono i vari strati della
+huffman a tipi di testo eterogenei può dare indicazioni interessanti su quali livelli
+linguistici siano davvero utili per la compressione e quali invece rischiano di
+essere solo una complicazione romantica ma poco pratica.
+
+Per il momento, questo basta. Se stai leggendo queste righe, probabilmente hai già
+eseguito almeno un paio di comandi gcc_huffman.py e hai visto qualche numero uscire
+a schermo. Da qui in poi il laboratorio è aperto: modifica il testo, duplica il file,
+confronta i risultati e annota le tue osservazioni. La huffman, con un po’ di pazienza,
+diventerà sempre più interessante.

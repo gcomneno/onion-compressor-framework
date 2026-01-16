@@ -1,0 +1,11 @@
+{
+  "spec": "gcc-ocf.pipeline.v1",
+  "name": "tpl_lines_v0",
+  "layer": "tpl_lines_v0",
+  "codec": "zlib",
+  "stream_codecs": {
+    "TPL": "zlib",
+    "IDS": "num_v1",
+    "NUMS": "num_v1"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "spec": "gcc-ocf.pipeline.v1",
+  "name": "split_text_nums_v1",
+  "layer": "split_text_nums",
+  "codec": "zlib",
+  "stream_codecs": {
+    "TEXT": "zlib",
+    "NUMS": "num_v1"
+  }
+}

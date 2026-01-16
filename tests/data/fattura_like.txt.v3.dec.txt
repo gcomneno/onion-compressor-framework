@@ -1,0 +1,76 @@
+FATTURA-LIKE - regression playground
+Scopo: testo ripetitivo con molte cifre (date, importi, quantita, codici) per testare split_text_nums.
+
+=== DATI FORNITORE ===
+Ragione sociale: ACME S.r.l.
+P.IVA: IT01234567890
+Codice SDI: ABCD123
+PEC: fatture@pec.example.it
+IBAN: IT60X0542811101000000123456
+
+=== DOCUMENTO 1 ===
+Tipo documento: TD01
+Fattura n. 000121 del 2025-12-21
+Cliente: Rossi Mario
+Righe:
+  01) Cod.CSW001  Qta=8.0  Prezzo=75,00 EUR  Tot=600,00 EUR
+  02) Cod.DEV042  Qta=12.5  Prezzo=85,00 EUR  Tot=1.062,50 EUR
+  03) Cod.ONS010  Qta=3.0  Prezzo=120,00 EUR  Tot=360,00 EUR
+  04) Cod.LIC2026  Qta=1.0  Prezzo=499,90 EUR  Tot=499,90 EUR
+  05) Cod.RPT007  Qta=2.0  Prezzo=60,00 EUR  Tot=120,00 EUR
+  06) Cod.TRN003  Qta=6.0  Prezzo=55,00 EUR  Tot=330,00 EUR
+
+Riepilogo IVA:
+  Imponibile: 2.972,40 EUR
+  IVA 22%   : 653,93 EUR
+  Totale    : 3.626,33 EUR
+Pagamento: bonifico 30 gg f.m.
+
+=== DOCUMENTO 2 ===
+Tipo documento: TD01
+Fattura n. 000122 del 2025-12-22
+Cliente: Studio Bianchi
+Righe:
+  01) Cod.CSW001  Qta=8.5  Prezzo=77,00 EUR  Tot=654,50 EUR
+  02) Cod.DEV042  Qta=13.0  Prezzo=87,00 EUR  Tot=1.131,00 EUR
+  03) Cod.ONS010  Qta=3.5  Prezzo=122,00 EUR  Tot=427,00 EUR
+  04) Cod.LIC2026  Qta=1.5  Prezzo=501,90 EUR  Tot=752,85 EUR
+  05) Cod.RPT007  Qta=2.5  Prezzo=62,00 EUR  Tot=155,00 EUR
+  06) Cod.TRN003  Qta=6.5  Prezzo=57,00 EUR  Tot=370,50 EUR
+
+Riepilogo IVA:
+  Imponibile: 3.490,85 EUR
+  IVA 22%   : 767,99 EUR
+  Totale    : 4.258,84 EUR
+Pagamento: bonifico 30 gg f.m.
+
+=== DOCUMENTO 3 ===
+Tipo documento: TD01
+Fattura n. 000123 del 2025-12-23
+Cliente: CAF Lucca
+Righe:
+  01) Cod.CSW001  Qta=9.0  Prezzo=79,00 EUR  Tot=711,00 EUR
+  02) Cod.DEV042  Qta=13.5  Prezzo=89,00 EUR  Tot=1.201,50 EUR
+  03) Cod.ONS010  Qta=4.0  Prezzo=124,00 EUR  Tot=496,00 EUR
+  04) Cod.LIC2026  Qta=2.0  Prezzo=503,90 EUR  Tot=1.007,80 EUR
+  05) Cod.RPT007  Qta=3.0  Prezzo=64,00 EUR  Tot=192,00 EUR
+  06) Cod.TRN003  Qta=7.0  Prezzo=59,00 EUR  Tot=413,00 EUR
+
+Riepilogo IVA:
+  Imponibile: 4.021,30 EUR
+  IVA 22%   : 884,69 EUR
+  Totale    : 4.905,99 EUR
+Pagamento: bonifico 30 gg f.m.
+
+=== DOCUMENTO 4 ===
+Tipo documento: TD04 (nota di credito)
+Nota credito n. 000005 del 2026-01-10
+Cliente: CAF Lucca
+Righe:
+  01) Rettifica servizio  Qta=1  Prezzo=-120,00 EUR  Tot=-120,00 EUR
+  02) Sconto commerciale  Qta=1  Prezzo=-30,00 EUR  Tot=-30,00 EUR
+
+Riepilogo IVA:
+  Imponibile: -150,00 EUR
+  IVA 22%   : -33,00 EUR
+  Totale    : -183,00 EUR

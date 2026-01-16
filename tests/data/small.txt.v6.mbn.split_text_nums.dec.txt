@@ -1,0 +1,19 @@
+Questo è un piccolo file di test per il progetto huffman-compressor.
+L’obiettivo non è dire qualcosa di profondissimo, ma avere abbastanza testo
+per vedere cosa succede quando proviamo a comprimere frasi italiane reali
+con diversi livelli di pre-processing.
+
+In questo paragrafo ripetiamo volutamente alcune parole, come "huffman",
+"compressore", "testo" e "Huffman". La speranza è che i livelli basati su
+parole o pseudo-sillabe riescano a notare queste ripetizioni molto meglio
+di un semplice compressore a byte.
+
+La huffman linguistica ha più strati: lettere, sillabe, parole e, un giorno,
+forse anche lemmi con tutta la loro brava morfologia. Per ora ci accontentiamo
+di vedere se i vari step riescono almeno a non peggiorare troppo la situazione
+rispetto al file originale.
+
+Se stai leggendo questo file, probabilmente stai giocando con il comando
+gcc_huffman.py usando le opzioni c1, c2, c3 o c4. L’importante è ricordarsi
+di controllare sempre che il file decompresso sia identico a questo.
+Diff è il tuo migliore amico.
