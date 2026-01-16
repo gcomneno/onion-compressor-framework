@@ -1,0 +1,68 @@
+name: CI Gate
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+
+      - name: Tests (pytest)
+        run: |
+          pytest -q
+
+      - name: CLI gate (help/version + smoke file/dir)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m gcc_ocf.cli --version
+          python -m gcc_ocf.cli --help >/dev/null
+
+          # File smoke: compress/decompress roundtrip
+          tmp="$(mktemp -d)"
+          printf "HELLO 123\nRIGA ARTICOLO: vite M3 qty=10 prezzo=1.20\n" > "$tmp/in.txt"
+          python -m gcc_ocf.cli file compress "$tmp/in.txt" "$tmp/out.gcc" --layer bytes --codec zlib
+          python -m gcc_ocf.cli file verify "$tmp/out.gcc" --json >/dev/null
+          python -m gcc_ocf.cli file decompress "$tmp/out.gcc" "$tmp/back.txt"
+          diff -u "$tmp/in.txt" "$tmp/back.txt"
+
+          # Pipeline validate (inline JSON)
+          spec='{"spec":"gcc-ocf.pipeline.v1","name":"ci-smoke","layer":"split_text_nums","codec":"zlib","mbn":true,"stream_codecs":{"TEXT":"zlib","NUMS":"num_v1"}}'
+          python -m gcc_ocf.cli file pipeline-validate "$spec" >/dev/null
+
+          # Dir smoke: pack/verify/unpack
+          mkdir -p "$tmp/in_dir/sub"
+          printf "HELLO 123\n" > "$tmp/in_dir/a.txt"
+          printf "HELLO 124\n" > "$tmp/in_dir/sub/b.txt"
+          python -m gcc_ocf.cli dir pack "$tmp/in_dir" "$tmp/out_dir" --buckets 4
+          python -m gcc_ocf.cli dir verify "$tmp/out_dir" --json >/dev/null
+          python -m gcc_ocf.cli dir unpack "$tmp/out_dir" "$tmp/back_dir"
+          diff -u "$tmp/in_dir/a.txt" "$tmp/back_dir/a.txt"
+          diff -u "$tmp/in_dir/sub/b.txt" "$tmp/back_dir/sub/b.txt"
