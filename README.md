@@ -1,4 +1,8 @@
 # GCC Onion Compressor Framework (GCC-OCF)
+
+[![CI](https://github.com/gcomneno/onion-compressor-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/gcomneno/onion-compressor-framework/actions/workflows/ci.yml)
+[![Ruff](https://img.shields.io/badge/ruff-lint-success)](https://github.com/astral-sh/ruff)
+
 > **Nota:** “GCC” qui significa *Giancarlo Compression Codec* (GiadaWare). **Non** è GNU GCC.
 
 Framework “a cipolla” per compressione **lossless** con:
