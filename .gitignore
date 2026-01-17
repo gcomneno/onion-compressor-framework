@@ -28,3 +28,7 @@ bench_out/
 
 # Project-specific caches
 tools/top_pipelines.json
+tests/data
+
+# local test corpora (not tracked)
+tests/data/
