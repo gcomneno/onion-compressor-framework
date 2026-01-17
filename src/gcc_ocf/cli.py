@@ -6,19 +6,15 @@ UX policy:
   - The default CLI is *semantic* (layer/codec/options). No c7/d7 names.
   - Legacy modes remain available under ``gcc-ocf legacy ...``.
 
-Exit codes (high level):
-  - 0: success
-  - 2: usage/config error (bad pipeline spec JSON, etc.)
-  - 10: generic failure
-  - 13: integrity/hash mismatch (HashMismatch)
+Notes:
+  - --version is supported at top-level.
+  - verify supports --json (machine-readable success output).
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from importlib import metadata
 from pathlib import Path
 
 from gcc_ocf.dir_pipeline_spec import DirPipelineSpecError, load_dir_pipeline_spec
@@ -28,10 +24,15 @@ from gcc_ocf.pipeline_spec import PipelineSpecError, load_pipeline_spec
 
 def _pkg_version() -> str:
     try:
-        return metadata.version("gcc-ocf")
-    except metadata.PackageNotFoundError:
-        # running from source without installed metadata (e.g. python -m ...)
-        return "0.0.0+dev"
+        from importlib.metadata import PackageNotFoundError, version  # py3.8+
+
+        try:
+            return version("gcc-ocf")
+        except PackageNotFoundError:
+            # editable install but script invoked from source, or metadata missing
+            return "0+unknown"
+    except Exception:
+        return "0+unknown"
 
 
 def _add_common_args(p: argparse.ArgumentParser) -> None:
@@ -48,6 +49,24 @@ def _run_legacy_dir(argv: list[str]) -> int:
     from gcc_ocf.legacy.gcc_dir import main as legacy_main
 
     return legacy_main(argv)
+
+
+def _print_verify_json(kind: str, target: Path, *, full: bool) -> None:
+    import json
+
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "kind": kind,
+                "target": str(target),
+                "full": bool(full),
+                "version": _pkg_version(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _semantic_file_compress(
@@ -107,9 +126,7 @@ def _semantic_file_compress_from_pipeline(
 
     wants_mbn = bool(spec.mbn)
     if spec.mbn is None:
-        wants_mbn = (layer_id in {"split_text_nums", "tpl_lines_v0"}) or (
-            stream_codecs is not None
-        )
+        wants_mbn = (layer_id in {"split_text_nums", "tpl_lines_v0"}) or (stream_codecs is not None)
 
     if wants_mbn:
         compress_file_v7(
@@ -162,121 +179,31 @@ def _semantic_file_pipeline_validate(pipeline_arg: str) -> int:
     return 0
 
 
-def _json_ok(payload: dict[str, object]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-
-
-def _json_err(payload: dict[str, object]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), file=sys.stderr)
-
-
-def _semantic_file_verify(input_path: Path, *, full: bool, as_json: bool, debug: bool) -> int:
+def _semantic_file_verify(input_path: Path, *, full: bool, json_out: bool) -> int:
     from gcc_ocf.verify import verify_container_file
 
-    try:
-        verify_container_file(input_path, full=full)
-    except GCCOCFError as e:
-        if debug:
-            raise
-        code = int(getattr(e, "exit_code", 10) or 10)
-        if as_json:
-            _json_err(
-                {
-                    "ok": False,
-                    "kind": "file",
-                    "target": str(input_path),
-                    "full": full,
-                    "error": e.__class__.__name__,
-                    "message": str(e),
-                    "exit_code": code,
-                }
-            )
-            return code
-        raise
-    except Exception as e:
-        if debug:
-            raise
-        if as_json:
-            _json_err(
-                {
-                    "ok": False,
-                    "kind": "file",
-                    "target": str(input_path),
-                    "full": full,
-                    "error": e.__class__.__name__,
-                    "message": str(e),
-                    "exit_code": 10,
-                }
-            )
-            return 10
-        raise
-
-    if as_json:
-        _json_ok(
-            {
-                "ok": True,
-                "kind": "file",
-                "target": str(input_path),
-                "full": full,
-                "version": _pkg_version(),
-            }
-        )
+    verify_container_file(input_path, full=full)
+    if json_out:
+        _print_verify_json("file", input_path, full=full)
     else:
         print("OK")
     return 0
 
 
-def _semantic_dir_verify(input_dir: Path, *, full: bool, as_json: bool, debug: bool) -> int:
+def _semantic_dir_verify(input_dir: Path, *, full: bool, json_out: bool) -> int:
+    # Supports both classic packed-dir (manifest + GCA1 buckets) and single-container dirs.
+    from gcc_ocf.single_container_dir import is_single_container_dir, verify_single_container_dir
     from gcc_ocf.verify import verify_packed_dir
 
-    try:
+    if is_single_container_dir(input_dir):
+        verify_single_container_dir(input_dir, full=full)
+        kind = "dir-single"
+    else:
         verify_packed_dir(input_dir, full=full)
-    except GCCOCFError as e:
-        if debug:
-            raise
-        code = int(getattr(e, "exit_code", 10) or 10)
-        if as_json:
-            _json_err(
-                {
-                    "ok": False,
-                    "kind": "dir",
-                    "target": str(input_dir),
-                    "full": full,
-                    "error": e.__class__.__name__,
-                    "message": str(e),
-                    "exit_code": code,
-                }
-            )
-            return code
-        raise
-    except Exception as e:
-        if debug:
-            raise
-        if as_json:
-            _json_err(
-                {
-                    "ok": False,
-                    "kind": "dir",
-                    "target": str(input_dir),
-                    "full": full,
-                    "error": e.__class__.__name__,
-                    "message": str(e),
-                    "exit_code": 10,
-                }
-            )
-            return 10
-        raise
+        kind = "dir"
 
-    if as_json:
-        _json_ok(
-            {
-                "ok": True,
-                "kind": "dir",
-                "target": str(input_dir),
-                "full": full,
-                "version": _pkg_version(),
-            }
-        )
+    if json_out:
+        _print_verify_json(kind, input_dir, full=full)
     else:
         print("OK")
     return 0
@@ -294,8 +221,15 @@ def _semantic_dir_pack(
     *,
     buckets: int | None,
     pipeline_arg: str | None,
+    single_container: bool = False,
     jobs: int = 1,
 ) -> int:
+    if single_container:
+        from gcc_ocf.single_container_dir import pack_single_container_dir
+
+        pack_single_container_dir(input_dir, output_dir)
+        return 0
+
     from gcc_ocf.legacy.gcc_dir import packdir
 
     dir_spec = load_dir_pipeline_spec(pipeline_arg) if pipeline_arg else None
@@ -311,8 +245,12 @@ def _semantic_dir_pack(
 
 def _semantic_dir_unpack(input_dir: Path, restore_dir: Path) -> int:
     from gcc_ocf.legacy.gcc_dir import unpackdir
+    from gcc_ocf.single_container_dir import is_single_container_dir, unpack_single_container_dir
 
-    unpackdir(input_dir, restore_dir)
+    if is_single_container_dir(input_dir):
+        unpack_single_container_dir(input_dir, restore_dir)
+    else:
+        unpackdir(input_dir, restore_dir)
     return 0
 
 
@@ -320,12 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="gcc-ocf", description="GCC Onion Compressor Framework (GCC-OCF)"
     )
-    p.add_argument(
-        "--version",
-        action="version",
-        version=f"gcc-ocf {_pkg_version()}",
-        help="Show version and exit",
-    )
+    p.add_argument("--version", action="version", version=f"gcc-ocf {_pkg_version()}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # file ...
@@ -380,7 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fv = sub_file.add_parser("verify", help="Verify a compressed container file")
     p_fv.add_argument("input", type=Path)
     p_fv.add_argument("--full", action="store_true", help="Recompute/validate full payload")
-    p_fv.add_argument("--json", action="store_true", help="Machine-readable output (JSON)")
+    p_fv.add_argument("--json", action="store_true", help="Emit machine-readable JSON on success")
     _add_common_args(p_fv)
 
     p_d = sub_file.add_parser("decompress", help="Lossless decompress (universal v1..v6+MBN)")
@@ -432,6 +365,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Parallel jobs for compression (default: 1). Only small files are parallelized to cap RAM.",
     )
+    p_pack.add_argument(
+        "--single-container",
+        action="store_true",
+        help=(
+            "Pack the whole directory as ONE container file (bundle.gcc) using the winning text pipeline "
+            "(concat + split_text_nums + MBN). Text-only: non-UTF8/binary files cause a UsageError."
+        ),
+    )
     _add_common_args(p_pack)
 
     p_unpack = sub_dir.add_parser(
@@ -441,10 +382,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_unpack.add_argument("restore_dir", type=Path)
     _add_common_args(p_unpack)
 
-    p_dv = sub_dir.add_parser("verify", help="Verify a packed output directory (manifest + GCA1)")
+    p_dv = sub_dir.add_parser("verify", help="Verify a packed output directory (manifest + GCA1) or a single-container dir")
     p_dv.add_argument("input_dir", type=Path)
     p_dv.add_argument("--full", action="store_true", help="Recompute sha256 for blobs/resources")
-    p_dv.add_argument("--json", action="store_true", help="Machine-readable output (JSON)")
+    p_dv.add_argument("--json", action="store_true", help="Emit machine-readable JSON on success")
     _add_common_args(p_dv)
 
     # legacy ...
@@ -491,9 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             if ns.file_cmd == "pipeline-validate":
                 return _semantic_file_pipeline_validate(str(ns.pipeline))
             if ns.file_cmd == "verify":
-                return _semantic_file_verify(
-                    ns.input, full=bool(ns.full), as_json=bool(ns.json), debug=bool(ns.debug)
-                )
+                return _semantic_file_verify(ns.input, full=bool(ns.full), json_out=bool(ns.json))
             if ns.file_cmd == "decompress":
                 return _semantic_file_decompress(ns.input, ns.output)
             if ns.file_cmd == "extract":
@@ -513,14 +452,13 @@ def main(argv: list[str] | None = None) -> int:
                     ns.output_dir,
                     buckets=ns.buckets,
                     pipeline_arg=ns.pipeline,
+                    single_container=bool(getattr(ns, "single_container", False)),
                     jobs=ns.jobs,
                 )
             if ns.dir_cmd == "unpack":
                 return _semantic_dir_unpack(ns.input_dir, ns.restore_dir)
             if ns.dir_cmd == "verify":
-                return _semantic_dir_verify(
-                    ns.input_dir, full=bool(ns.full), as_json=bool(ns.json), debug=bool(ns.debug)
-                )
+                return _semantic_dir_verify(ns.input_dir, full=bool(ns.full), json_out=bool(ns.json))
             raise AssertionError("unreachable")
 
         if ns.cmd == "legacy":
