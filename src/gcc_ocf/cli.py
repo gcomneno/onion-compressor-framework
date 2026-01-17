@@ -222,12 +222,13 @@ def _semantic_dir_pack(
     buckets: int | None,
     pipeline_arg: str | None,
     single_container: bool = False,
+    keep_concat: bool = False,
     jobs: int = 1,
 ) -> int:
     if single_container:
         from gcc_ocf.single_container_dir import pack_single_container_dir
 
-        pack_single_container_dir(input_dir, output_dir)
+        pack_single_container_dir(input_dir, output_dir, keep_concat=keep_concat)
         return 0
 
     from gcc_ocf.legacy.gcc_dir import packdir
@@ -373,6 +374,12 @@ def build_parser() -> argparse.ArgumentParser:
             "(concat + split_text_nums + MBN). Text-only: non-UTF8/binary files cause a UsageError."
         ),
     )
+    p_pack.add_argument(
+        "--keep-concat",
+        action="store_true",
+        help="(single-container) Keep the intermediate bundle.concat file in the output directory",
+    )
+
     _add_common_args(p_pack)
 
     p_unpack = sub_dir.add_parser(
@@ -453,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
                     buckets=ns.buckets,
                     pipeline_arg=ns.pipeline,
                     single_container=bool(getattr(ns, "single_container", False)),
+                    keep_concat=bool(getattr(ns, "keep_concat", False)),
                     jobs=ns.jobs,
                 )
             if ns.dir_cmd == "unpack":

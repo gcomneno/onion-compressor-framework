@@ -100,3 +100,33 @@ bash tests/run_roundtrip.sh
 
 ## Documentazione formati
 Vedi `docs/formats.md`.
+
+## Directory pack: single-container (text-only, max compression)
+Se hai una directory **solo di file UTF-8 di testo** (es. `.md`, `.txt`) e vuoi la miglior compressione,
+usa `--single-container`.
+
+Questa modalità fa automaticamente quello che a mano era risultato vincente:
+- concat deterministico di tutti i file (ordine stabile)
+- compressione con pipeline **split_text_nums + MBN** (TEXT:zlib, NUMS:num_v1)
+
+### Esempio
+```bash
+gcc-ocf dir pack --single-container ./LeLes /tmp/leles_sc
+gcc-ocf dir verify /tmp/leles_sc --json
+gcc-ocf dir verify /tmp/leles_sc --json --full
+gcc-ocf dir unpack /tmp/leles_sc /tmp/leles_back
+diff -ru ./LeLes /tmp/leles_back && echo OK
+```
+
+### Limiti
+- **Text-only**: se nella directory c'è un file binario o non UTF-8, la modalità fallisce con `UsageError`.
+  In quel caso usa il workflow classico:
+
+```bash
+gcc-ocf dir pack ./DIR /tmp/out --buckets 16
+```
+
+### File prodotti
+- `bundle.gcc` (container compresso)
+- `bundle_index.json` (indice: offset/len/sha256 per ogni file)
+- `bundle.concat` solo se usi `--keep-concat`

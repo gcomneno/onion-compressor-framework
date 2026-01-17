@@ -1,248 +1,239 @@
-"""Single-container directory mode (text-only).
+"""
+Single-container directory packing.
 
-Used by: `gcc-ocf dir pack --single-container`.
+Goal
+----
+Provide a directory packing mode that behaves like the "winning" approach for text corpora:
+  concat (deterministic) + split_text_nums + MBN (TEXT:zlib, NUMS:num_v1) -> strong compression
 
-Produces:
-  - output_dir/bundle.gcc
-  - output_dir/bundle_index.json
+Output layout (stable)
+----------------------
+<out_dir>/
+  bundle.gcc          # GCC container v6 payload + MBN (c7)
+  bundle_index.json   # JSON index describing each original file slice inside the concat
+  bundle.concat       # optional; only if keep_concat=True
 
-Text-only: non-UTF8/binary files are rejected (use normal dir pack instead).
+Constraints
+-----------
+- Text-only: every file must be valid UTF-8.
+- No format changes to existing packed-dir (manifest + buckets). This is a separate mode.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from gcc_ocf.errors import CorruptPayload, HashMismatch, UsageError
+from gcc_ocf.verify import verify_container_file
 
-SPEC_ID = "gcc-ocf.single-container.v1"
-BUNDLE_NAME = "bundle.gcc"
-INDEX_NAME = "bundle_index.json"
+BUNDLE_GCC = "bundle.gcc"
+BUNDLE_INDEX = "bundle_index.json"
+BUNDLE_CONCAT = "bundle.concat"
+
+# Bundle format version (index schema only; container format remains v6/v6+MBN)
+BUNDLE_INDEX_SPEC = "gcc-ocf.dir_bundle_index.v1"
 
 
 @dataclass(frozen=True)
-class BundleEntry:
+class _IndexEntry:
     rel: str
     offset: int
     length: int
     sha256: str
 
 
-def is_single_container_dir(path: Path) -> bool:
-    """Return True if `path` looks like a single-container packed dir."""
-    p = Path(path)
-    return (p / BUNDLE_NAME).is_file() and (p / INDEX_NAME).is_file()
+def is_single_container_dir(out_dir: Path) -> bool:
+    out = Path(out_dir)
+    return (out / BUNDLE_GCC).is_file() and (out / BUNDLE_INDEX).is_file()
 
 
-def _iter_files_sorted(root: Path) -> list[Path]:
-    root = Path(root)
-    files: list[Path] = []
-    for p in root.rglob("*"):
-        if p.is_file():
-            files.append(p)
-    files.sort(key=lambda x: str(x.resolve().relative_to(root.resolve())))
+def _iter_files_deterministic(root: Path) -> list[Path]:
+    files: list[Path] = [p for p in root.rglob("*") if p.is_file()]
+    files.sort(key=lambda p: p.relative_to(root).as_posix())
     return files
 
 
-def _relpath(root: Path, p: Path) -> str:
-    return str(p.resolve().relative_to(root.resolve()))
+def _sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
 
 
-def _sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _load_index(index_path: Path) -> dict[str, Any]:
+def _read_utf8_bytes(p: Path) -> bytes:
+    b = p.read_bytes()
     try:
-        obj = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise CorruptPayload(f"index JSON non valido: {index_path}: {e}") from e
-    if not isinstance(obj, dict):
-        raise CorruptPayload(f"index non è un oggetto JSON: {index_path}")
-    if obj.get("spec") != SPEC_ID:
-        raise CorruptPayload(
-            f"index spec non supportata: {obj.get('spec')!r} (attesa {SPEC_ID!r})"
-        )
-    files = obj.get("files")
-    if not isinstance(files, list):
-        raise CorruptPayload("index: campo 'files' mancante o non-list")
-    return obj
+        b.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise UsageError(
+            f"single-container: file non UTF-8/binary: {p} "
+            f"(pos={e.start}). Usa 'gcc-ocf dir pack' classico per dati binari."
+        ) from e
+    return b
 
 
-def _decode_bundle_bytes(bundle_path: Path) -> bytes:
-    from gcc_ocf.engine.container import Engine
-    from gcc_ocf.engine.container_v6 import decompress_v6
+def pack_single_container_dir(input_dir: Path, output_dir: Path, *, keep_concat: bool = False) -> None:
+    inp = Path(input_dir)
+    out = Path(output_dir)
+    if not inp.is_dir():
+        raise UsageError(f"input_dir non è una directory: {inp}")
 
-    blob = bundle_path.read_bytes()
-    eng = Engine.default()
-    return decompress_v6(eng, blob, allow_extract=False)
+    out.mkdir(parents=True, exist_ok=True)
 
+    concat_path = out / BUNDLE_CONCAT
+    index_path = out / BUNDLE_INDEX
+    gcc_path = out / BUNDLE_GCC
 
-def pack_single_container_dir(input_dir: Path, output_dir: Path) -> None:
-    """Pack a directory into ONE bundle container (text-only)."""
-    from gcc_ocf.legacy.gcc_huffman import compress_file_v7
-
-    in_dir = Path(input_dir).resolve()
-    out_dir = Path(output_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    files = _iter_files_sorted(in_dir)
-    if not files:
-        raise UsageError(f"directory vuota: {in_dir}")
-
-    # 1) build concatenated blob + index (deterministic order)
-    concat_path = out_dir / "bundle.concat"
-    entries: list[BundleEntry] = []
-    off = 0
+    entries: list[_IndexEntry] = []
+    offset = 0
 
     with concat_path.open("wb") as fp:
-        for p in files:
-            rel = _relpath(in_dir, p)
-            data = p.read_bytes()
-            try:
-                data.decode("utf-8")
-            except UnicodeDecodeError as e:
-                raise UsageError(
-                    f"--single-container: file non UTF-8/binary: {rel} (usa dir pack normale)"
-                ) from e
+        for p in _iter_files_deterministic(inp):
+            rel = p.relative_to(inp).as_posix()
+            data = _read_utf8_bytes(p)
 
             fp.write(data)
             entries.append(
-                BundleEntry(rel=rel, offset=int(off), length=int(len(data)), sha256=_sha256_hex(data))
+                _IndexEntry(
+                    rel=rel,
+                    offset=offset,
+                    length=len(data),
+                    sha256=_sha256_bytes(data),
+                )
             )
-            off += len(data)
+            offset += len(data)
 
-    # 2) compress concat using the winning semantic pipeline
-    bundle_path = out_dir / BUNDLE_NAME
+    concat_bytes = concat_path.read_bytes()
+    payload: dict[str, Any] = {
+        "spec": BUNDLE_INDEX_SPEC,
+        "root": inp.name,
+        "count": len(entries),
+        "files": [e.__dict__ for e in entries],
+        "concat_sha256": _sha256_bytes(concat_bytes),
+    }
+    index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Compress concat with the winning semantic pipeline:
+    # split_text_nums + MBN (smart defaults: TEXT:zlib, NUMS:num_v1)
+    from gcc_ocf.legacy.gcc_huffman import compress_file_v7
+
     compress_file_v7(
         str(concat_path),
-        str(bundle_path),
+        str(gcc_path),
         layer_id="split_text_nums",
         codec_id="zlib",
-        stream_codecs_spec="TEXT:zlib,NUMS:num_v1",
+        stream_codecs_spec=None,
     )
 
-    # 3) write index JSON
-    index_obj: dict[str, Any] = {
-        "spec": SPEC_ID,
-        "bundle": BUNDLE_NAME,
-        "concat_size": int(off),
-        "pipeline": {
-            "layer": "split_text_nums",
-            "codec": "zlib",
-            "stream_codecs": {"TEXT": "zlib", "NUMS": "num_v1"},
-            "mbn": True,
-        },
-        "files": [
-            {
-                "rel": e.rel,
-                "offset": int(e.offset),
-                "length": int(e.length),
-                "sha256": e.sha256,
-            }
-            for e in entries
-        ],
-    }
-    (out_dir / INDEX_NAME).write_text(
-        json.dumps(index_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    if not keep_concat:
+        try:
+            concat_path.unlink(missing_ok=True)
+        except Exception:
+            # Non-fatal: leaving bundle.concat is acceptable.
+            pass
 
-    # remove intermediate concat (keep output dir clean)
+
+def _load_index(out_dir: Path) -> dict[str, Any]:
+    p = Path(out_dir) / BUNDLE_INDEX
+    if not p.is_file():
+        raise CorruptPayload(f"bundle index non trovato: {p}")
+
     try:
-        concat_path.unlink()
-    except Exception:
-        pass
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise CorruptPayload(f"bundle index JSON invalido: {p}: {e}") from e
+
+    if not isinstance(data, dict) or data.get("spec") != BUNDLE_INDEX_SPEC:
+        raise CorruptPayload(f"bundle index spec invalida: {p}")
+
+    files = data.get("files")
+    if not isinstance(files, list):
+        raise CorruptPayload(f"bundle index senza 'files': {p}")
+
+    return data
 
 
-def verify_single_container_dir(input_dir: Path, *, full: bool = False) -> None:
-    """Verify a single-container packed dir."""
-    from gcc_ocf.verify import verify_container_file
+def _extract_concat_bytes(out_dir: Path) -> bytes:
+    out = Path(out_dir)
+    gcc_path = out / BUNDLE_GCC
+    if not gcc_path.is_file():
+        raise CorruptPayload(f"bundle.gcc non trovato: {gcc_path}")
 
-    in_dir = Path(input_dir).resolve()
-    index_path = in_dir / INDEX_NAME
-    bundle_path = in_dir / BUNDLE_NAME
+    from gcc_ocf.legacy.gcc_huffman import decompress_file_v7
 
-    if not index_path.is_file():
-        raise CorruptPayload(f"index non trovato: {index_path}")
-    if not bundle_path.is_file():
-        raise CorruptPayload(f"bundle non trovato: {bundle_path}")
+    with tempfile.TemporaryDirectory(prefix="gcc-ocf-bundle-") as td:
+        tmp = Path(td) / "concat.bin"
+        decompress_file_v7(str(gcc_path), str(tmp))
+        return tmp.read_bytes()
 
-    obj = _load_index(index_path)
-    verify_container_file(bundle_path, full=full)
+
+def verify_single_container_dir(output_dir: Path, *, full: bool = False) -> None:
+    out = Path(output_dir)
+    if not is_single_container_dir(out):
+        raise CorruptPayload(f"non è una single-container dir: {out}")
+
+    # 1) verify container integrity
+    verify_container_file(out / BUNDLE_GCC, full=full)
+
+    # 2) verify index integrity + (optional) per-file hashes
+    idx = _load_index(out)
+    concat_bytes = _extract_concat_bytes(out)
+
+    concat_sha = _sha256_bytes(concat_bytes)
+    if idx.get("concat_sha256") != concat_sha:
+        raise CorruptPayload("bundle concat sha256 mismatch (index vs payload)")
 
     if not full:
         return
 
-    data = _decode_bundle_bytes(bundle_path)
-    n = len(data)
+    for raw in idx["files"]:
+        if not isinstance(raw, dict):
+            raise CorruptPayload(f"bundle index entry invalida: {raw}")
 
-    for rec in obj.get("files", []):
-        if not isinstance(rec, dict):
-            raise CorruptPayload("index: record file non-oggetto")
-        rel = rec.get("rel")
-        off = rec.get("offset")
-        ln = rec.get("length")
-        sha = rec.get("sha256")
+        rel = raw.get("rel")
+        off = int(raw.get("offset", -1))
+        ln = int(raw.get("length", -1))
+        sha = raw.get("sha256")
 
-        if not isinstance(rel, str) or not rel:
-            raise CorruptPayload("index: rel mancante")
-        if not isinstance(off, int) or not isinstance(ln, int) or off < 0 or ln < 0:
-            raise CorruptPayload(f"index: offset/length invalidi per {rel}")
-        if not isinstance(sha, str) or len(sha) < 16:
-            raise CorruptPayload(f"index: sha256 invalido per {rel}")
-        if off + ln > n:
-            raise CorruptPayload(f"index: bounds fuori range per {rel} (off={off} len={ln} n={n})")
+        if not rel or off < 0 or ln < 0 or not sha:
+            raise CorruptPayload(f"bundle index entry invalida: {raw}")
 
-        chunk = data[off : off + ln]
-        got = _sha256_hex(chunk)
-        if got != sha:
-            raise HashMismatch(f"sha256 mismatch per {rel}")
+        blob = concat_bytes[off : off + ln]
+        if len(blob) != ln:
+            raise CorruptPayload(f"bundle slice fuori range: {rel}")
+
+        if _sha256_bytes(blob) != sha:
+            raise HashMismatch(f"bundle file hash mismatch: {rel}")
 
 
 def unpack_single_container_dir(input_dir: Path, restore_dir: Path) -> None:
-    """Unpack a single-container packed dir."""
-    in_dir = Path(input_dir).resolve()
-    out_dir = Path(restore_dir).resolve()
+    inp = Path(input_dir)
+    if not is_single_container_dir(inp):
+        raise CorruptPayload(f"non è una single-container dir: {inp}")
 
-    index_path = in_dir / INDEX_NAME
-    bundle_path = in_dir / BUNDLE_NAME
+    restore = Path(restore_dir)
+    restore.mkdir(parents=True, exist_ok=True)
 
-    if not index_path.is_file():
-        raise CorruptPayload(f"index non trovato: {index_path}")
-    if not bundle_path.is_file():
-        raise CorruptPayload(f"bundle non trovato: {bundle_path}")
+    idx = _load_index(inp)
+    concat_bytes = _extract_concat_bytes(inp)
 
-    obj = _load_index(index_path)
-    data = _decode_bundle_bytes(bundle_path)
-    n = len(data)
+    for raw in idx["files"]:
+        if not isinstance(raw, dict):
+            raise CorruptPayload(f"bundle index entry invalida: {raw}")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+        rel = raw.get("rel")
+        off = int(raw.get("offset", -1))
+        ln = int(raw.get("length", -1))
 
-    for rec in obj.get("files", []):
-        if not isinstance(rec, dict):
-            raise CorruptPayload("index: record file non-oggetto")
-        rel = rec.get("rel")
-        off = rec.get("offset")
-        ln = rec.get("length")
-        sha = rec.get("sha256")
+        if not rel or off < 0 or ln < 0:
+            raise CorruptPayload(f"bundle index entry invalida: {raw}")
 
-        if not isinstance(rel, str) or not rel:
-            raise CorruptPayload("index: rel mancante")
-        if not isinstance(off, int) or not isinstance(ln, int) or off < 0 or ln < 0:
-            raise CorruptPayload(f"index: offset/length invalidi per {rel}")
-        if off + ln > n:
-            raise CorruptPayload(f"index: bounds fuori range per {rel}")
+        data = concat_bytes[off : off + ln]
+        if len(data) != ln:
+            raise CorruptPayload(f"bundle slice fuori range: {rel}")
 
-        chunk = data[off : off + ln]
-        if isinstance(sha, str) and sha:
-            got = _sha256_hex(chunk)
-            if got != sha:
-                raise HashMismatch(f"sha256 mismatch per {rel}")
-
-        dst = out_dir / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(chunk)
+        outp = restore / rel
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_bytes(data)
