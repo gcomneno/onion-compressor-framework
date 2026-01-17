@@ -11,13 +11,12 @@ Framework “a cipolla” per compressione **lossless** con:
 - container binario v6 con payload MBN
 - workflow directory-based con bucketing + autopick + archivi `.gca` (GCA1) + resources
 
-## CLI
-
-Nuova CLI (stabile, in evoluzione):
+## Quickstart
 
 ```bash
 pip install -e ".[dev]"
 gcc-ocf --help
+gcc-ocf --version
 ```
 
 Wrapper compat (NON toccare gli script legacy):
@@ -25,108 +24,95 @@ Wrapper compat (NON toccare gli script legacy):
 - `python3 src/python/gcc_huffman.py ...` (usato da `tests/run_roundtrip.sh`, `scripts/bench_all.sh`)
 - `python3 src/python/gcc_dir.py ...`
 
-## Quickstart
+## CLI
 
-Install (dev):
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-File roundtrip (lossless):
-
-```bash
-gcc-ocf file compress in.txt out.gcc --layer bytes --codec zlib
-gcc-ocf file verify out.gcc
-gcc-ocf file decompress out.gcc back.txt
-```
-
-Pipeline spec validate + use (inline JSON):
-
-```bash
-spec='{"spec":"gcc-ocf.pipeline.v1","name":"demo","layer":"split_text_nums","codec":"zlib","mbn":true,"stream_codecs":{"TEXT":"zlib","NUMS":"num_v1"}}'
-gcc-ocf file pipeline-validate "$spec"
-gcc-ocf file compress in.txt out.gcc --pipeline "$spec"
-```
-
-Directory workflow:
-
-```bash
-gcc-ocf dir pack ./in_dir ./out_dir --buckets 8
-gcc-ocf dir verify ./out_dir
-gcc-ocf dir unpack ./out_dir ./restored_dir
-```
-
-Machine-readable verify:
-
-```bash
-gcc-ocf file verify out.gcc --json
-gcc-ocf dir verify ./out_dir --json --full
-```
-
-Docs:
-- `docs/pipeline_spec_v1.md`
-- `docs/container_v6_mbn.md`
-- `docs/gca1_format.md`
-
-### Pipeline spec (consigliato)
+### File: pipeline spec (consigliato)
 
 Per rendere un piano di compressione **riproducibile**, usa un pipeline spec JSON:
 
 ```bash
 gcc-ocf file compress IN OUT --pipeline @tools/pipelines/split_text_nums_v1.json
 gcc-ocf file decompress OUT BACK
+gcc-ocf file verify OUT --full --json
 ```
 
 Spec e schema: vedi `docs/pipeline_spec.md`.
 
-### Directory pipeline spec (dir mode)
+### Directory: modalità classica (manifest + bucket .gca)
 
-Per fissare candidate pool + autopick + resources in directory mode:
+Directory mode “classico”: bucketing deterministico + autopick + archivi `.gca` (GCA1).
 
 ```bash
-gcc-ocf dir pipeline-validate @tools/dir_pipelines/default_v1.json
-gcc-ocf dir pack IN_DIR OUT_DIR --pipeline @tools/dir_pipelines/default_v1.json
+gcc-ocf dir pack IN_DIR OUT_DIR --buckets 16
+gcc-ocf dir verify OUT_DIR --full --json
 gcc-ocf dir unpack OUT_DIR RESTORED_DIR
 ```
 
-Schema: vedi `docs/dir_pipeline_spec.md`.
+Schema e opzioni: vedi `docs/dir_pipeline_spec.md`.
+
+## Single-container modes (dir pack)
+
+Queste modalità sono “a parte”: niente `.gca`, niente `manifest.jsonl`.
+L’output è una directory con 1 o 2 container `.gcc` + index JSON.
+
+### `--single-container` (TEXT-only)
+
+Concat deterministico dei file + pipeline vincente per testo:
+`concat → split_text_nums + MBN (TEXT:zlib, NUMS:num_v1)`
+
+```bash
+gcc-ocf dir pack --single-container IN_DIR OUT_DIR
+gcc-ocf dir verify OUT_DIR --full --json
+gcc-ocf dir unpack OUT_DIR RESTORED_DIR
+```
+
+Se c’è anche solo un file non UTF-8/binary: errore (è voluto).
+
+Opzionale:
+- `--keep-concat` mantiene `bundle.concat` (intermedio).
+
+Output:
+- `bundle.gcc`
+- `bundle_index.json`
+- (opzionale) `bundle.concat`
+
+### `--single-container-mixed` (TEXT + BIN)
+
+Due bundle separati:
+- **TEXT**: `concat → split_text_nums + MBN (TEXT:zlib, NUMS:num_v1)`
+- **BIN**: `bytes + (zstd se disponibile, altrimenti zlib)`
+
+```bash
+gcc-ocf dir pack --single-container-mixed IN_DIR OUT_DIR
+gcc-ocf dir verify OUT_DIR --full --json
+gcc-ocf dir unpack OUT_DIR RESTORED_DIR
+```
+
+Note pratiche:
+- Se la directory è tutta testo, `bundle_bin.concat` può essere vuoto (normale).
+- Su file binari molto piccoli è facile peggiorare (overhead container+codec): ratio > 1 è normale.
+
+Opzionale:
+- `--keep-concat` mantiene `bundle_text.concat` e `bundle_bin.concat`.
+
+Output:
+- `bundle_text.gcc`, `bundle_text_index.json`
+- `bundle_bin.gcc`, `bundle_bin_index.json`
+- (opzionale) `bundle_text.concat`, `bundle_bin.concat`
 
 ## Test baseline
 
 ```bash
 bash tests/run_roundtrip.sh
+pytest -q
+ruff check .
 ```
+
+## Exit codes
+
+Source of truth: `src/gcc_ocf/errors.py`  
+Doc generata: `docs/exit_codes.md`
 
 ## Documentazione formati
+
 Vedi `docs/formats.md`.
-
-## Directory pack: single-container (text-only, max compression)
-Se hai una directory **solo di file UTF-8 di testo** (es. `.md`, `.txt`) e vuoi la miglior compressione,
-usa `--single-container`.
-
-Questa modalità fa automaticamente quello che a mano era risultato vincente:
-- concat deterministico di tutti i file (ordine stabile)
-- compressione con pipeline **split_text_nums + MBN** (TEXT:zlib, NUMS:num_v1)
-
-### Esempio
-```bash
-gcc-ocf dir pack --single-container ./LeLes /tmp/leles_sc
-gcc-ocf dir verify /tmp/leles_sc --json
-gcc-ocf dir verify /tmp/leles_sc --json --full
-gcc-ocf dir unpack /tmp/leles_sc /tmp/leles_back
-diff -ru ./LeLes /tmp/leles_back && echo OK
-```
-
-### Limiti
-- **Text-only**: se nella directory c'è un file binario o non UTF-8, la modalità fallisce con `UsageError`.
-  In quel caso usa il workflow classico:
-
-```bash
-gcc-ocf dir pack ./DIR /tmp/out --buckets 16
-```
-
-### File prodotti
-- `bundle.gcc` (container compresso)
-- `bundle_index.json` (indice: offset/len/sha256 per ogni file)
-- `bundle.concat` solo se usi `--keep-concat`

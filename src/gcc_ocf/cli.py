@@ -9,6 +9,10 @@ UX policy:
 Notes:
   - --version is supported at top-level.
   - verify supports --json (machine-readable success output).
+  - Directory pack supports:
+      * classic manifest + GCA1 buckets (default)
+      * --single-container (TEXT-only)
+      * --single-container-mixed (TEXT semantic + BIN generic)
 """
 
 from __future__ import annotations
@@ -191,11 +195,24 @@ def _semantic_file_verify(input_path: Path, *, full: bool, json_out: bool) -> in
 
 
 def _semantic_dir_verify(input_dir: Path, *, full: bool, json_out: bool) -> int:
-    # Supports both classic packed-dir (manifest + GCA1 buckets) and single-container dirs.
+    """Verify a directory output.
+
+    Supports:
+      - classic packed-dir (manifest + GCA1 buckets)
+      - --single-container output dir
+      - --single-container-mixed output dir
+    """
     from gcc_ocf.single_container_dir import is_single_container_dir, verify_single_container_dir
+    from gcc_ocf.single_container_mixed_dir import (
+        is_single_container_mixed_dir,
+        verify_single_container_mixed_dir,
+    )
     from gcc_ocf.verify import verify_packed_dir
 
-    if is_single_container_dir(input_dir):
+    if is_single_container_mixed_dir(input_dir):
+        verify_single_container_mixed_dir(input_dir, full=full)
+        kind = "dir-mixed"
+    elif is_single_container_dir(input_dir):
         verify_single_container_dir(input_dir, full=full)
         kind = "dir-single"
     else:
@@ -222,9 +239,16 @@ def _semantic_dir_pack(
     buckets: int | None,
     pipeline_arg: str | None,
     single_container: bool = False,
+    single_container_mixed: bool = False,
     keep_concat: bool = False,
     jobs: int = 1,
 ) -> int:
+    if single_container_mixed:
+        from gcc_ocf.single_container_mixed_dir import pack_single_container_mixed_dir
+
+        pack_single_container_mixed_dir(input_dir, output_dir, keep_concat=keep_concat)
+        return 0
+
     if single_container:
         from gcc_ocf.single_container_dir import pack_single_container_dir
 
@@ -247,8 +271,14 @@ def _semantic_dir_pack(
 def _semantic_dir_unpack(input_dir: Path, restore_dir: Path) -> int:
     from gcc_ocf.legacy.gcc_dir import unpackdir
     from gcc_ocf.single_container_dir import is_single_container_dir, unpack_single_container_dir
+    from gcc_ocf.single_container_mixed_dir import (
+        is_single_container_mixed_dir,
+        unpack_single_container_mixed_dir,
+    )
 
-    if is_single_container_dir(input_dir):
+    if is_single_container_mixed_dir(input_dir):
+        unpack_single_container_mixed_dir(input_dir, restore_dir)
+    elif is_single_container_dir(input_dir):
         unpack_single_container_dir(input_dir, restore_dir)
     else:
         unpackdir(input_dir, restore_dir)
@@ -345,7 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(p_dir_v)
 
     p_pack = sub_dir.add_parser(
-        "pack", help="Pack a directory into an output directory (manifest + per-bucket .gca)"
+        "pack", help="Pack a directory into an output directory (manifest + per-bucket .gca) or single-container modes"
     )
     p_pack.add_argument("input_dir", type=Path)
     p_pack.add_argument("output_dir", type=Path)
@@ -366,7 +396,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Parallel jobs for compression (default: 1). Only small files are parallelized to cap RAM.",
     )
-    p_pack.add_argument(
+
+    sc_group = p_pack.add_mutually_exclusive_group()
+    sc_group.add_argument(
         "--single-container",
         action="store_true",
         help=(
@@ -374,10 +406,19 @@ def build_parser() -> argparse.ArgumentParser:
             "(concat + split_text_nums + MBN). Text-only: non-UTF8/binary files cause a UsageError."
         ),
     )
+    sc_group.add_argument(
+        "--single-container-mixed",
+        action="store_true",
+        help=(
+            "Pack the directory as TWO bundles: "
+            "TEXT (concat + split_text_nums + MBN) and BIN (bytes + zstd if available else zlib)."
+        ),
+    )
+
     p_pack.add_argument(
         "--keep-concat",
         action="store_true",
-        help="(single-container) Keep the intermediate bundle.concat file in the output directory",
+        help="(single-container*) Keep the intermediate bundle*.concat file(s) in the output directory",
     )
 
     _add_common_args(p_pack)
@@ -389,7 +430,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_unpack.add_argument("restore_dir", type=Path)
     _add_common_args(p_unpack)
 
-    p_dv = sub_dir.add_parser("verify", help="Verify a packed output directory (manifest + GCA1) or a single-container dir")
+    p_dv = sub_dir.add_parser(
+        "verify",
+        help="Verify a packed output directory (manifest + GCA1) or a single-container dir",
+    )
     p_dv.add_argument("input_dir", type=Path)
     p_dv.add_argument("--full", action="store_true", help="Recompute sha256 for blobs/resources")
     p_dv.add_argument("--json", action="store_true", help="Emit machine-readable JSON on success")
@@ -460,6 +504,7 @@ def main(argv: list[str] | None = None) -> int:
                     buckets=ns.buckets,
                     pipeline_arg=ns.pipeline,
                     single_container=bool(getattr(ns, "single_container", False)),
+                    single_container_mixed=bool(getattr(ns, "single_container_mixed", False)),
                     keep_concat=bool(getattr(ns, "keep_concat", False)),
                     jobs=ns.jobs,
                 )

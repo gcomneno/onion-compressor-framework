@@ -15,7 +15,7 @@ Output layout (stable)
 
 Policy
 ------
-- TEXT bundle: "textish" UTF-8 (decoded) AND does NOT contain NUL bytes.
+- TEXT bundle: must decode as UTF-8 AND must NOT contain NUL bytes.
 - BIN bundle: everything else.
 
 Compression plan
@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -78,12 +77,6 @@ def _sha256_bytes(b: bytes) -> str:
 
 
 def _is_textish_utf8(data: bytes) -> bool:
-    """
-    Minimal, deterministic "textish" heuristic:
-      - must decode as UTF-8
-      - must NOT contain NUL bytes
-    This avoids classifying many binary blobs (that still decode) as TEXT.
-    """
     if b"\x00" in data:
         return False
     try:
@@ -94,15 +87,48 @@ def _is_textish_utf8(data: bytes) -> bool:
 
 
 def _choose_bin_codec_id() -> str:
-    """
-    Policy: zstd if available, else zlib.
-    "Available" means the optional dependency can be imported and the codec is usable.
-    """
     try:
         from gcc_ocf.core.codec_zstd import zstd as _zstd  # type: ignore
     except Exception:
         return "zlib"
     return "zstd" if _zstd is not None else "zlib"
+
+
+def _decompress_gcc_universal(blob: bytes) -> bytes:
+    """Universal decoder (silent): v1..v6 + MBN (d7 behaviour) -> raw bytes."""
+    from gcc_ocf.engine.container import Engine
+    from gcc_ocf.engine.container_v6 import decompress_v6
+    from gcc_ocf.legacy.gcc_huffman import (
+        MAGIC,
+        VERSION_STEP1,
+        VERSION_STEP2,
+        VERSION_STEP3,
+        VERSION_STEP4,
+        decompress_bytes_v1,
+        decompress_bytes_v2,
+        decompress_bytes_v3,
+        decompress_bytes_v4,
+    )
+
+    if len(blob) < 4 or blob[:3] != MAGIC:
+        raise CorruptPayload("bundle.gcc non GCC (magic mancante)")
+
+    ver = blob[3]
+    if ver == VERSION_STEP1:
+        return decompress_bytes_v1(blob)
+    if ver == VERSION_STEP2:
+        return decompress_bytes_v2(blob)
+    if ver == VERSION_STEP3:
+        return decompress_bytes_v3(blob)
+    if ver == VERSION_STEP4:
+        return decompress_bytes_v4(blob)
+    if ver == 5:
+        return Engine.default().decompress(blob)
+    if ver == 6:
+        eng = Engine.default()
+        return decompress_v6(eng, blob)
+
+    raise CorruptPayload(f"Versione GCC non supportata: {ver}")
 
 
 def pack_single_container_mixed_dir(
@@ -225,13 +251,7 @@ def _load_index(path: Path, *, expected_kind: str) -> dict[str, Any]:
 def _extract_concat_bytes(bundle_gcc: Path) -> bytes:
     if not bundle_gcc.is_file():
         raise CorruptPayload(f"bundle .gcc non trovato: {bundle_gcc}")
-
-    from gcc_ocf.legacy.gcc_huffman import decompress_file_v7
-
-    with tempfile.TemporaryDirectory(prefix="gcc-ocf-bundle-") as td:
-        tmp = Path(td) / "concat.bin"
-        decompress_file_v7(str(bundle_gcc), str(tmp))
-        return tmp.read_bytes()
+    return _decompress_gcc_universal(bundle_gcc.read_bytes())
 
 
 def verify_single_container_mixed_dir(output_dir: Path, *, full: bool = False) -> None:
@@ -239,19 +259,26 @@ def verify_single_container_mixed_dir(output_dir: Path, *, full: bool = False) -
     if not is_single_container_mixed_dir(out):
         raise CorruptPayload(f"non è una single-container mixed dir: {out}")
 
+    # In full mode, any decode/decompress error is treated as tamper (HashMismatch),
+    # because a single flipped bit can break codec frames before we can compute hashes.
     try:
         verify_container_file(out / BUNDLE_TEXT_GCC, full=full)
         verify_container_file(out / BUNDLE_BIN_GCC, full=full)
     except Exception as e:
         if full:
             raise HashMismatch("tamper detected (container verify failed)") from e
-        raise
+        raise CorruptPayload(f"verify container fallita: {e}") from e
 
     idx_text = _load_index(out / BUNDLE_TEXT_INDEX, expected_kind="text")
     idx_bin = _load_index(out / BUNDLE_BIN_INDEX, expected_kind="bin")
 
-    text_concat = _extract_concat_bytes(out / BUNDLE_TEXT_GCC)
-    bin_concat = _extract_concat_bytes(out / BUNDLE_BIN_GCC)
+    try:
+        text_concat = _extract_concat_bytes(out / BUNDLE_TEXT_GCC)
+        bin_concat = _extract_concat_bytes(out / BUNDLE_BIN_GCC)
+    except Exception as e:
+        if full:
+            raise HashMismatch("tamper detected (decode failed)") from e
+        raise CorruptPayload(f"decode fallita: {e}") from e
 
     if idx_text.get("concat_sha256") != _sha256_bytes(text_concat):
         raise CorruptPayload("bundle_text concat sha256 mismatch (index vs payload)")

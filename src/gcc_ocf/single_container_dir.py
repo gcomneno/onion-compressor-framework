@@ -9,7 +9,7 @@ Provide a directory packing mode that behaves like the "winning" approach for te
 Output layout (stable)
 ----------------------
 <out_dir>/
-  bundle.gcc          # GCC container v6 payload + MBN (c7)
+  bundle.gcc          # GCC container (v1..v6 + MBN supported by d7)
   bundle_index.json   # JSON index describing each original file slice inside the concat
   bundle.concat       # optional; only if keep_concat=True
 
@@ -23,20 +23,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from gcc_ocf.errors import CorruptPayload, HashMismatch, UsageError
 from gcc_ocf.verify import verify_container_file
 
-BUNDLE_GCC = "bundle.gcc"
-BUNDLE_INDEX = "bundle_index.json"
-BUNDLE_CONCAT = "bundle.concat"
+BUNDLE_GCC: Final[str] = "bundle.gcc"
+BUNDLE_INDEX: Final[str] = "bundle_index.json"
+BUNDLE_CONCAT: Final[str] = "bundle.concat"
 
-# Bundle format version (index schema only; container format remains v6/v6+MBN)
-BUNDLE_INDEX_SPEC = "gcc-ocf.dir_bundle_index.v1"
+# Bundle format version (only for the index schema, not the container itself)
+BUNDLE_INDEX_SPEC: Final[str] = "gcc-ocf.dir_bundle_index.v1"
 
 
 @dataclass(frozen=True)
@@ -53,7 +52,7 @@ def is_single_container_dir(out_dir: Path) -> bool:
 
 
 def _iter_files_deterministic(root: Path) -> list[Path]:
-    files: list[Path] = [p for p in root.rglob("*") if p.is_file()]
+    files = [p for p in root.rglob("*") if p.is_file()]
     files.sort(key=lambda p: p.relative_to(root).as_posix())
     return files
 
@@ -72,6 +71,43 @@ def _read_utf8_bytes(p: Path) -> bytes:
             f"(pos={e.start}). Usa 'gcc-ocf dir pack' classico per dati binari."
         ) from e
     return b
+
+
+def _decompress_gcc_universal(blob: bytes) -> bytes:
+    """Universal decoder (silent): v1..v6 + MBN (d7 behaviour) -> raw bytes."""
+    from gcc_ocf.engine.container import Engine
+    from gcc_ocf.engine.container_v6 import decompress_v6
+    from gcc_ocf.legacy.gcc_huffman import (
+        MAGIC,
+        VERSION_STEP1,
+        VERSION_STEP2,
+        VERSION_STEP3,
+        VERSION_STEP4,
+        decompress_bytes_v1,
+        decompress_bytes_v2,
+        decompress_bytes_v3,
+        decompress_bytes_v4,
+    )
+
+    if len(blob) < 4 or blob[:3] != MAGIC:
+        raise CorruptPayload("bundle.gcc non GCC (magic mancante)")
+
+    ver = blob[3]
+    if ver == VERSION_STEP1:
+        return decompress_bytes_v1(blob)
+    if ver == VERSION_STEP2:
+        return decompress_bytes_v2(blob)
+    if ver == VERSION_STEP3:
+        return decompress_bytes_v3(blob)
+    if ver == VERSION_STEP4:
+        return decompress_bytes_v4(blob)
+    if ver == 5:
+        return Engine.default().decompress(blob)
+    if ver == 6:
+        eng = Engine.default()
+        return decompress_v6(eng, blob)
+
+    raise CorruptPayload(f"Versione GCC non supportata: {ver}")
 
 
 def pack_single_container_dir(input_dir: Path, output_dir: Path, *, keep_concat: bool = False) -> None:
@@ -96,27 +132,23 @@ def pack_single_container_dir(input_dir: Path, output_dir: Path, *, keep_concat:
 
             fp.write(data)
             entries.append(
-                _IndexEntry(
-                    rel=rel,
-                    offset=offset,
-                    length=len(data),
-                    sha256=_sha256_bytes(data),
-                )
+                _IndexEntry(rel=rel, offset=offset, length=len(data), sha256=_sha256_bytes(data))
             )
             offset += len(data)
 
-    concat_bytes = concat_path.read_bytes()
     payload: dict[str, Any] = {
         "spec": BUNDLE_INDEX_SPEC,
         "root": inp.name,
+        "kind": "text",
         "count": len(entries),
         "files": [e.__dict__ for e in entries],
-        "concat_sha256": _sha256_bytes(concat_bytes),
+        "concat_sha256": _sha256_bytes(concat_path.read_bytes()),
+        "layer_used": "split_text_nums",
+        "codec_used": "zlib",
+        "stream_codecs_used": "TEXT:zlib,NUMS:num_v1",
     }
     index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Compress concat with the winning semantic pipeline:
-    # split_text_nums + MBN (smart defaults: TEXT:zlib, NUMS:num_v1)
     from gcc_ocf.legacy.gcc_huffman import compress_file_v7
 
     compress_file_v7(
@@ -124,14 +156,13 @@ def pack_single_container_dir(input_dir: Path, output_dir: Path, *, keep_concat:
         str(gcc_path),
         layer_id="split_text_nums",
         codec_id="zlib",
-        stream_codecs_spec=None,
+        stream_codecs_spec=None,  # smart default TEXT:zlib, NUMS:num_v1
     )
 
     if not keep_concat:
         try:
             concat_path.unlink(missing_ok=True)
         except Exception:
-            # Non-fatal: leaving bundle.concat is acceptable.
             pass
 
 
@@ -139,7 +170,6 @@ def _load_index(out_dir: Path) -> dict[str, Any]:
     p = Path(out_dir) / BUNDLE_INDEX
     if not p.is_file():
         raise CorruptPayload(f"bundle index non trovato: {p}")
-
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:
@@ -148,8 +178,7 @@ def _load_index(out_dir: Path) -> dict[str, Any]:
     if not isinstance(data, dict) or data.get("spec") != BUNDLE_INDEX_SPEC:
         raise CorruptPayload(f"bundle index spec invalida: {p}")
 
-    files = data.get("files")
-    if not isinstance(files, list):
+    if "files" not in data or not isinstance(data["files"], list):
         raise CorruptPayload(f"bundle index senza 'files': {p}")
 
     return data
@@ -160,13 +189,8 @@ def _extract_concat_bytes(out_dir: Path) -> bytes:
     gcc_path = out / BUNDLE_GCC
     if not gcc_path.is_file():
         raise CorruptPayload(f"bundle.gcc non trovato: {gcc_path}")
-
-    from gcc_ocf.legacy.gcc_huffman import decompress_file_v7
-
-    with tempfile.TemporaryDirectory(prefix="gcc-ocf-bundle-") as td:
-        tmp = Path(td) / "concat.bin"
-        decompress_file_v7(str(gcc_path), str(tmp))
-        return tmp.read_bytes()
+    blob = gcc_path.read_bytes()
+    return _decompress_gcc_universal(blob)
 
 
 def verify_single_container_dir(output_dir: Path, *, full: bool = False) -> None:
@@ -174,10 +198,8 @@ def verify_single_container_dir(output_dir: Path, *, full: bool = False) -> None
     if not is_single_container_dir(out):
         raise CorruptPayload(f"non è una single-container dir: {out}")
 
-    # 1) verify container integrity
     verify_container_file(out / BUNDLE_GCC, full=full)
 
-    # 2) verify index integrity + (optional) per-file hashes
     idx = _load_index(out)
     concat_bytes = _extract_concat_bytes(out)
 
@@ -189,14 +211,10 @@ def verify_single_container_dir(output_dir: Path, *, full: bool = False) -> None
         return
 
     for raw in idx["files"]:
-        if not isinstance(raw, dict):
-            raise CorruptPayload(f"bundle index entry invalida: {raw}")
-
         rel = raw.get("rel")
         off = int(raw.get("offset", -1))
         ln = int(raw.get("length", -1))
         sha = raw.get("sha256")
-
         if not rel or off < 0 or ln < 0 or not sha:
             raise CorruptPayload(f"bundle index entry invalida: {raw}")
 
@@ -220,16 +238,9 @@ def unpack_single_container_dir(input_dir: Path, restore_dir: Path) -> None:
     concat_bytes = _extract_concat_bytes(inp)
 
     for raw in idx["files"]:
-        if not isinstance(raw, dict):
-            raise CorruptPayload(f"bundle index entry invalida: {raw}")
-
-        rel = raw.get("rel")
-        off = int(raw.get("offset", -1))
-        ln = int(raw.get("length", -1))
-
-        if not rel or off < 0 or ln < 0:
-            raise CorruptPayload(f"bundle index entry invalida: {raw}")
-
+        rel = raw["rel"]
+        off = int(raw["offset"])
+        ln = int(raw["length"])
         data = concat_bytes[off : off + ln]
         if len(data) != ln:
             raise CorruptPayload(f"bundle slice fuori range: {rel}")
