@@ -81,6 +81,8 @@ from gcc_ocf.layers.tpl_lines_v0 import LayerTplLinesV0
 from gcc_ocf.layers.tpl_lines_v0 import _unpack_templates as _tpl_v0_unpack_templates
 
 MANIFEST_NAME = "manifest.jsonl"
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"  # sha256(b"")
+
 ARCHIVE_PREFIX = "bucket_"
 ARCHIVE_SUFFIX = ".gca"
 TOP_PIPELINES_REL = Path("tools") / "top_pipelines.json"
@@ -1487,6 +1489,15 @@ def unpackdir(output_dir: Path, restore_dir: Path) -> None:
                 # skip failed entries
                 continue
 
+            # Empty-file invariant: always restore empty files without decoding.
+            in_size = int(rec.get('in_size') or 0)
+            sha = str(rec.get('sha256') or rec.get('in_sha256') or '')
+            if in_size == 0 and sha == EMPTY_SHA256:
+                dst_path = restore_dir / rel
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                dst_path.write_bytes(b'')
+                n_ok += 1
+                continue
             try:
                 archive_rel = rec.get("archive")
                 if archive_rel:
