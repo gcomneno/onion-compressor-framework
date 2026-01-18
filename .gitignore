@@ -31,5 +31,12 @@ tools/top_pipelines.json
 
 # local test corpora (not tracked)
 tests/data/
-
 /tests/data/
+
+# Bench / torture outputs (P2)
+bench_out/
+tools/p2/out/
+**/*.metrics
+**/*.log
+**/*.md
+**/*.csv
