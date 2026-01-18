@@ -166,7 +166,9 @@ def pack_single_container_mixed_dir(
                 text_off += len(data)
             else:
                 f_bin.write(data)
-                bin_entries.append(_IndexEntry(rel=rel, offset=bin_off, length=len(data), sha256=sha))
+                bin_entries.append(
+                    _IndexEntry(rel=rel, offset=bin_off, length=len(data), sha256=sha)
+                )
                 bin_off += len(data)
 
     text_concat_bytes = text_concat_path.read_bytes()
@@ -281,8 +283,13 @@ def verify_single_container_mixed_dir(output_dir: Path, *, full: bool = False) -
         raise CorruptPayload(f"decode fallita: {e}") from e
 
     if idx_text.get("concat_sha256") != _sha256_bytes(text_concat):
+        if full:
+            raise HashMismatch("bundle_text concat sha256 mismatch (index vs payload)")
         raise CorruptPayload("bundle_text concat sha256 mismatch (index vs payload)")
+
     if idx_bin.get("concat_sha256") != _sha256_bytes(bin_concat):
+        if full:
+            raise HashMismatch("bundle_bin concat sha256 mismatch (index vs payload)")
         raise CorruptPayload("bundle_bin concat sha256 mismatch (index vs payload)")
 
     if not full:
