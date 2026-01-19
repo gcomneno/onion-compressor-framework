@@ -28,16 +28,17 @@ Index schema: gcc-ocf.dir_bundle_index.v1
 
 from __future__ import annotations
 
+import codecs
 import hashlib
-import json
-from dataclasses import dataclass
+import tempfile
 from pathlib import Path
-from typing import Any, Final
+from typing import IO, Final
 
+from gcc_ocf.dir_index import DirBundleIndexV1, SPEC_INDEX_V1
 from gcc_ocf.errors import CorruptPayload, HashMismatch, UsageError
 from gcc_ocf.verify import verify_container_file
 
-SPEC_INDEX_V1: Final[str] = "gcc-ocf.dir_bundle_index.v1"
+SPEC_INDEX_V1_LOCAL: Final[str] = SPEC_INDEX_V1
 
 BUNDLE_TEXT_GCC: Final[str] = "bundle_text.gcc"
 BUNDLE_TEXT_INDEX: Final[str] = "bundle_text_index.json"
@@ -47,13 +48,7 @@ BUNDLE_BIN_GCC: Final[str] = "bundle_bin.gcc"
 BUNDLE_BIN_INDEX: Final[str] = "bundle_bin_index.json"
 BUNDLE_BIN_CONCAT: Final[str] = "bundle_bin.concat"
 
-
-@dataclass(frozen=True)
-class _IndexEntry:
-    rel: str
-    offset: int
-    length: int
-    sha256: str
+_CHUNK: Final[int] = 1024 * 1024  # 1 MiB
 
 
 def is_single_container_mixed_dir(out_dir: Path) -> bool:
@@ -72,18 +67,8 @@ def _iter_files_deterministic(root: Path) -> list[Path]:
     return files
 
 
-def _sha256_bytes(b: bytes) -> str:
+def _sha256_hex(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
-
-
-def _is_textish_utf8(data: bytes) -> bool:
-    if b"\x00" in data:
-        return False
-    try:
-        data.decode("utf-8")
-        return True
-    except UnicodeDecodeError:
-        return False
 
 
 def _choose_bin_codec_id() -> str:
@@ -92,6 +77,65 @@ def _choose_bin_codec_id() -> str:
     except Exception:
         return "zlib"
     return "zstd" if _zstd is not None else "zlib"
+
+
+def _copy_and_hash(src: IO[bytes], dst: IO[bytes], h: hashlib._Hash) -> int:
+    """Copy src->dst in chunks updating hash; returns copied bytes."""
+    total = 0
+    while True:
+        chunk = src.read(_CHUNK)
+        if not chunk:
+            break
+        dst.write(chunk)
+        h.update(chunk)
+        total += len(chunk)
+    return total
+
+
+def _spool_classify_and_hash(path: Path) -> tuple[bool, str, int, IO[bytes]]:
+    """
+    Stream the file once:
+      - write to a temp spool file
+      - compute sha256 incrementally
+      - classify as TEXT if: no NUL and valid UTF-8 for the entire stream
+    Returns: (is_textish, sha256_hex, length, spool_file positioned at start)
+    """
+    sha = hashlib.sha256()
+    total = 0
+
+    has_nul = False
+    utf8_ok = True
+    dec = codecs.getincrementaldecoder("utf-8")()
+
+    tf = tempfile.TemporaryFile()  # binary
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            tf.write(chunk)
+            sha.update(chunk)
+            total += len(chunk)
+
+            if not has_nul and b"\x00" in chunk:
+                has_nul = True
+                utf8_ok = False  # by policy, NUL => BIN
+
+            if utf8_ok:
+                try:
+                    # validate stream; we discard decoded text immediately
+                    dec.decode(chunk, final=False)
+                except UnicodeDecodeError:
+                    utf8_ok = False
+
+    if utf8_ok:
+        try:
+            dec.decode(b"", final=True)
+        except UnicodeDecodeError:
+            utf8_ok = False
+
+    tf.seek(0)
+    return (utf8_ok and not has_nul), sha.hexdigest(), total, tf
 
 
 def _decompress_gcc_universal(blob: bytes) -> bytes:
@@ -147,62 +191,61 @@ def pack_single_container_mixed_dir(
     text_concat_path = out / BUNDLE_TEXT_CONCAT
     bin_concat_path = out / BUNDLE_BIN_CONCAT
 
-    text_entries: list[_IndexEntry] = []
-    bin_entries: list[_IndexEntry] = []
+    idx_text = DirBundleIndexV1(
+        root=inp.name,
+        kind="text",
+        concat_sha256="",
+        layer_used="split_text_nums",
+        codec_used="zlib",
+        files=[],
+        stream_codecs_used="TEXT:zlib,NUMS:num_v1",
+    )
+
+    idx_bin = DirBundleIndexV1(
+        root=inp.name,
+        kind="bin",
+        concat_sha256="",
+        layer_used="bytes",
+        codec_used="",
+        files=[],
+        stream_codecs_used=None,
+    )
+
     text_off = 0
     bin_off = 0
+
+    text_concat_sha = hashlib.sha256()
+    bin_concat_sha = hashlib.sha256()
 
     with text_concat_path.open("wb") as f_text, bin_concat_path.open("wb") as f_bin:
         for p in _iter_files_deterministic(inp):
             rel = p.relative_to(inp).as_posix()
-            data = p.read_bytes()
-            sha = _sha256_bytes(data)
 
-            if _is_textish_utf8(data):
-                f_text.write(data)
-                text_entries.append(
-                    _IndexEntry(rel=rel, offset=text_off, length=len(data), sha256=sha)
-                )
-                text_off += len(data)
-            else:
-                f_bin.write(data)
-                bin_entries.append(
-                    _IndexEntry(rel=rel, offset=bin_off, length=len(data), sha256=sha)
-                )
-                bin_off += len(data)
+            is_text, file_sha, ln, spool = _spool_classify_and_hash(p)
+            try:
+                if is_text:
+                    off = text_off
+                    _copy_and_hash(spool, f_text, text_concat_sha)
+                    idx_text.put(rel, offset=off, length=ln, sha256=file_sha)
+                    text_off += ln
+                else:
+                    off = bin_off
+                    _copy_and_hash(spool, f_bin, bin_concat_sha)
+                    idx_bin.put(rel, offset=off, length=ln, sha256=file_sha)
+                    bin_off += ln
+            finally:
+                try:
+                    spool.close()
+                except Exception:
+                    pass
 
-    text_concat_bytes = text_concat_path.read_bytes()
-    bin_concat_bytes = bin_concat_path.read_bytes()
-
-    text_index: dict[str, Any] = {
-        "spec": SPEC_INDEX_V1,
-        "root": inp.name,
-        "kind": "text",
-        "count": len(text_entries),
-        "files": [e.__dict__ for e in text_entries],
-        "concat_sha256": _sha256_bytes(text_concat_bytes),
-        "layer_used": "split_text_nums",
-        "codec_used": "zlib",
-        "stream_codecs_used": "TEXT:zlib,NUMS:num_v1",
-    }
-    (out / BUNDLE_TEXT_INDEX).write_text(
-        json.dumps(text_index, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    idx_text.concat_sha256 = text_concat_sha.hexdigest()
+    idx_text.write(out / BUNDLE_TEXT_INDEX, indent=2)
 
     bin_codec_id = _choose_bin_codec_id()
-    bin_index: dict[str, Any] = {
-        "spec": SPEC_INDEX_V1,
-        "root": inp.name,
-        "kind": "bin",
-        "count": len(bin_entries),
-        "files": [e.__dict__ for e in bin_entries],
-        "concat_sha256": _sha256_bytes(bin_concat_bytes),
-        "layer_used": "bytes",
-        "codec_used": bin_codec_id,
-    }
-    (out / BUNDLE_BIN_INDEX).write_text(
-        json.dumps(bin_index, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    idx_bin.codec_used = bin_codec_id
+    idx_bin.concat_sha256 = bin_concat_sha.hexdigest()
+    idx_bin.write(out / BUNDLE_BIN_INDEX, indent=2)
 
     from gcc_ocf.legacy.gcc_huffman import compress_file_v6, compress_file_v7
 
@@ -229,27 +272,6 @@ def pack_single_container_mixed_dir(
                 pass
 
 
-def _load_index(path: Path, *, expected_kind: str) -> dict[str, Any]:
-    if not path.is_file():
-        raise CorruptPayload(f"bundle index non trovato: {path}")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise CorruptPayload(f"bundle index JSON invalido: {path}: {e}") from e
-
-    if not isinstance(data, dict) or data.get("spec") != SPEC_INDEX_V1:
-        raise CorruptPayload(f"bundle index spec invalida: {path}")
-
-    if data.get("kind") != expected_kind:
-        raise CorruptPayload(f"bundle index kind invalido (atteso {expected_kind}): {path}")
-
-    files = data.get("files")
-    if not isinstance(files, list):
-        raise CorruptPayload(f"bundle index senza 'files': {path}")
-
-    return data
-
-
 def _extract_concat_bytes(bundle_gcc: Path) -> bytes:
     if not bundle_gcc.is_file():
         raise CorruptPayload(f"bundle .gcc non trovato: {bundle_gcc}")
@@ -271,8 +293,8 @@ def verify_single_container_mixed_dir(output_dir: Path, *, full: bool = False) -
             raise HashMismatch("tamper detected (container verify failed)") from e
         raise CorruptPayload(f"verify container fallita: {e}") from e
 
-    idx_text = _load_index(out / BUNDLE_TEXT_INDEX, expected_kind="text")
-    idx_bin = _load_index(out / BUNDLE_BIN_INDEX, expected_kind="bin")
+    idx_text = DirBundleIndexV1.read(out / BUNDLE_TEXT_INDEX, expected_kind="text")
+    idx_bin = DirBundleIndexV1.read(out / BUNDLE_BIN_INDEX, expected_kind="bin")
 
     try:
         text_concat = _extract_concat_bytes(out / BUNDLE_TEXT_GCC)
@@ -282,14 +304,12 @@ def verify_single_container_mixed_dir(output_dir: Path, *, full: bool = False) -
             raise HashMismatch("tamper detected (decode failed)") from e
         raise CorruptPayload(f"decode fallita: {e}") from e
 
-    # IMPORTANT: concat_sha256 mismatch is tamper in --full (exit 13), but keep
-    # the lighter semantics in non-full mode (exit 10) for backwards compatibility.
-    if idx_text.get("concat_sha256") != _sha256_bytes(text_concat):
+    if idx_text.concat_sha256 != _sha256_hex(text_concat):
         if full:
             raise HashMismatch("bundle_text concat sha256 mismatch (index vs payload)")
         raise CorruptPayload("bundle_text concat sha256 mismatch (index vs payload)")
 
-    if idx_bin.get("concat_sha256") != _sha256_bytes(bin_concat):
+    if idx_bin.concat_sha256 != _sha256_hex(bin_concat):
         if full:
             raise HashMismatch("bundle_bin concat sha256 mismatch (index vs payload)")
         raise CorruptPayload("bundle_bin concat sha256 mismatch (index vs payload)")
@@ -297,25 +317,13 @@ def verify_single_container_mixed_dir(output_dir: Path, *, full: bool = False) -
     if not full:
         return
 
-    def _check_files(idx: dict[str, Any], concat_bytes: bytes) -> None:
-        for raw in idx["files"]:
-            if not isinstance(raw, dict):
-                raise CorruptPayload(f"bundle index entry invalida: {raw}")
-
-            rel = raw.get("rel")
-            off = int(raw.get("offset", -1))
-            ln = int(raw.get("length", -1))
-            sha = raw.get("sha256")
-
-            if not rel or off < 0 or ln < 0 or not sha:
-                raise CorruptPayload(f"bundle index entry invalida: {raw}")
-
-            blob = concat_bytes[off : off + ln]
-            if len(blob) != ln:
-                raise CorruptPayload(f"bundle slice fuori range: {rel}")
-
-            if _sha256_bytes(blob) != sha:
-                raise HashMismatch(f"bundle file hash mismatch: {rel}")
+    def _check_files(idx: DirBundleIndexV1, concat_bytes: bytes) -> None:
+        for e in idx.iter_entries():
+            blob = concat_bytes[e.offset : e.offset + e.length]
+            if len(blob) != e.length:
+                raise CorruptPayload(f"bundle slice fuori range: {e.rel}")
+            if _sha256_hex(blob) != e.sha256:
+                raise HashMismatch(f"bundle file hash mismatch: {e.rel}")
 
     _check_files(idx_text, text_concat)
     _check_files(idx_bin, bin_concat)
@@ -329,28 +337,19 @@ def unpack_single_container_mixed_dir(input_dir: Path, restore_dir: Path) -> Non
     restore = Path(restore_dir)
     restore.mkdir(parents=True, exist_ok=True)
 
-    idx_text = _load_index(inp / BUNDLE_TEXT_INDEX, expected_kind="text")
-    idx_bin = _load_index(inp / BUNDLE_BIN_INDEX, expected_kind="bin")
+    idx_text = DirBundleIndexV1.read(inp / BUNDLE_TEXT_INDEX, expected_kind="text")
+    idx_bin = DirBundleIndexV1.read(inp / BUNDLE_BIN_INDEX, expected_kind="bin")
 
     text_concat = _extract_concat_bytes(inp / BUNDLE_TEXT_GCC)
     bin_concat = _extract_concat_bytes(inp / BUNDLE_BIN_GCC)
 
-    def _restore(idx: dict[str, Any], concat_bytes: bytes) -> None:
-        for raw in idx["files"]:
-            if not isinstance(raw, dict):
-                raise CorruptPayload(f"bundle index entry invalida: {raw}")
+    def _restore(idx: DirBundleIndexV1, concat_bytes: bytes) -> None:
+        for e in idx.iter_entries():
+            data = concat_bytes[e.offset : e.offset + e.length]
+            if len(data) != e.length:
+                raise CorruptPayload(f"bundle slice fuori range: {e.rel}")
 
-            rel = raw.get("rel")
-            off = int(raw.get("offset", -1))
-            ln = int(raw.get("length", -1))
-            if not rel or off < 0 or ln < 0:
-                raise CorruptPayload(f"bundle index entry invalida: {raw}")
-
-            data = concat_bytes[off : off + ln]
-            if len(data) != ln:
-                raise CorruptPayload(f"bundle slice fuori range: {rel}")
-
-            outp = restore / rel
+            outp = restore / e.rel
             outp.parent.mkdir(parents=True, exist_ok=True)
             outp.write_bytes(data)
 

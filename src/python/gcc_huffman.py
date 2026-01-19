@@ -12,10 +12,9 @@ Core: Huffman su byte, riusato da:
 from __future__ import annotations
 
 import json
-import mmap
 import re
+import shutil
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 
 from gcc_ocf.core.bundle import EncodedStream, SymbolStream
@@ -769,96 +768,173 @@ def _split_csv(s: str) -> list[str]:
     return [x.strip() for x in (s or "").split(",") if x.strip()]
 
 
-@contextmanager
-def _read_bytes_or_mmap(path: Path):
-    """Return a bytes-like view of the file without Path.read_bytes().
 
-    For large inputs, this avoids creating a giant Python 'bytes' object.
-    - Empty files yield b"".
-    - Non-empty files yield a memoryview over a read-only mmap.
 
-    NOTE: The returned object is valid only inside the context manager.
+def _stream_container_v6_bytes_zstd(
+    *,
+    engine: Engine,
+    codec_id: str,
+    input_path: Path,
+    output_path: Path,
+    chunk_size: int = 1024 * 1024,
+) -> int | None:
+    """Write a v6 container for bytes+zstd (ZRAW1 payload) without loading the full input into RAM.
+
+    Returns output size in bytes, or None if streaming is not available.
     """
-    size = int(path.stat().st_size)
-    if size <= 0:
-        yield b""
-        return
+    if zstd is None:
+        return None
 
-    with path.open('rb') as f:
-        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        view = memoryview(mm)
+    try:
+        # ZRAW1 is used by v5_dispatch fast-path for bytes+zstd.
+        from gcc_ocf.core.zstd_raw import ZRAW1_MAGIC  # type: ignore
+    except Exception:
+        return None
+
+    codec = engine.codecs.get(codec_id)
+    if codec is None:
+        return None
+
+    level = int(getattr(codec, "level", 3))
+    tight = bool(getattr(codec, "tight", False))
+
+    try:
+        if tight:
+            cctx = zstd.ZstdCompressor(level=level, write_content_size=False, write_checksum=False)
+        else:
+            cctx = zstd.ZstdCompressor(level=level)
+    except Exception:
+        return None
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Pack header without payload; payload is 'rest of file'.
+    prefix = pack_container_v6(
+        b"",
+        layer_id="bytes",
+        codec_id=codec_id,
+        meta=b"",
+        payload_len=None,
+        is_extract=False,
+    )
+
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp_stream")
+    try:
+        with input_path.open("rb") as fin, tmp_path.open("wb") as fout:
+            fout.write(prefix)
+            fout.write(ZRAW1_MAGIC)
+            with cctx.stream_writer(fout, closefd=False) as sw:
+                shutil.copyfileobj(fin, sw, length=chunk_size)
+        tmp_path.replace(output_path)
+        return int(output_path.stat().st_size)
+    finally:
         try:
-            yield view
-        finally:
-            try:
-                view.release()
-            finally:
-                mm.close()
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
 
 
 def compress_file_v6(
-    input_path: str, output_path: str, layer_id: str = "bytes", codec_id: str = "huffman"
-) -> None:
-    """Compress a file into a v6 container.
+    engine: Engine,
+    input_path: Path,
+    output_path: Path,
+    layer_ids: list[str] | None = None,
+    codec_ids: list[str] | None = None,
+) -> dict[str, str]:
+    """Compress a single file into a v6 container.
 
-    RSS note: for layer_id='bytes' (typical for big BIN), we avoid Path.read_bytes()
-    and use a read-only mmap view instead.
+    P3-hard: for bytes+zstd, avoid Path.read_bytes() and stream directly to disk.
     """
-    from pathlib import Path
+    if layer_ids is None:
+        layer_ids = DEFAULT_LAYER_IDS
+    if codec_ids is None:
+        codec_ids = DEFAULT_CODEC_IDS
 
-    from gcc_ocf.engine.container import Engine
+    input_path = Path(input_path)
+    output_path = Path(output_path)
 
-    in_path = Path(input_path)
-    eng = Engine.default()
+    in_size = int(input_path.stat().st_size)
 
-    layers = _split_csv(layer_id) or ["bytes"]
-    codecs = _split_csv(codec_id) or ["huffman"]
+    data: bytes | None = None
 
-    best_blob = None
-    best_layer = None
-    best_codec = None
+    def _get_data() -> bytes:
+        nonlocal data
+        if data is None:
+            data = input_path.read_bytes()
+        return data
 
-    if len(layers) > 1 or len(codecs) > 1:
-        print("=== GCC Container v6 ===")
-        print(f"Candidates     : layers={','.join(layers)}  codecs={','.join(codecs)}")
+    best: dict[str, str] | None = None
+    best_size: int | None = None
+    best_tmp: Path | None = None
+    tmps: list[Path] = []
 
-    # Only mmap fast-path when ALL candidate layers are 'bytes'.
-    use_mmap = all(lid == 'bytes' for lid in layers)
+    for layer_id in layer_ids:
+        if layer_id not in LAYER_TO_CODE:
+            continue
+        for codec_id in codec_ids:
+            if codec_id not in CODEC_TO_CODE:
+                continue
+            if codec_id not in engine.codecs:
+                continue
 
-    if use_mmap:
-        with _read_bytes_or_mmap(in_path) as data:
-            for lid in layers:
-                for cid in codecs:
-                    blob = compress_v6(eng, data, layer_id=lid, codec_id=cid)
-                    if best_blob is None or len(blob) < len(best_blob):
-                        best_blob = blob
-                        best_layer = lid
-                        best_codec = cid
-    else:
-        data = in_path.read_bytes()
-        for lid in layers:
-            for cid in codecs:
-                blob = compress_v6(eng, data, layer_id=lid, codec_id=cid)
-                if best_blob is None or len(blob) < len(best_blob):
-                    best_blob = blob
-                    best_layer = lid
-                    best_codec = cid
+            tmp = output_path.with_suffix(output_path.suffix + f".tmp_{layer_id}_{codec_id}")
+            tmps.append(tmp)
 
-    assert best_blob is not None and best_layer is not None and best_codec is not None
+            try:
+                out_size: int | None = None
 
-    Path(output_path).write_bytes(best_blob)
+                # Stream bytes+zstd directly to disk (no full read into RAM).
+                if layer_id == "bytes" and codec_id in ("zstd", "zstd_tight"):
+                    out_size = _stream_container_v6_bytes_zstd(
+                        engine=engine,
+                        codec_id=codec_id,
+                        input_path=input_path,
+                        output_path=tmp,
+                    )
 
-    in_size = int(in_path.stat().st_size)
-    out_size = len(best_blob)
-    ratio = out_size / in_size if in_size else 0.0
+                if out_size is None:
+                    blob = compress_v6(engine, _get_data(), layer_id=layer_id, codec_id=codec_id)
+                    tmp.parent.mkdir(parents=True, exist_ok=True)
+                    tmp.write_bytes(blob)
+                    out_size = len(blob)
+
+                if best_size is None or out_size < best_size:
+                    best_size = out_size
+                    best = {"layer_id": layer_id, "codec_id": codec_id}
+                    best_tmp = tmp
+
+            except Exception as e:
+                # Try next candidate.
+                if os.environ.get("VERBOSE") == "1":
+                    print(f"[diag] compress_file_v6 skip {layer_id}/{codec_id}: {e}", file=sys.stderr)
+                continue
+
+    if best is None or best_tmp is None or best_size is None:
+        raise RuntimeError("compression failed: no viable (layer_id, codec_id) candidate")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    best_tmp.replace(output_path)
+
+    # cleanup other tmp files
+    for t in tmps:
+        if t != output_path and t != best_tmp:
+            try:
+                if t.exists():
+                    t.unlink()
+            except Exception:
+                pass
+
+    ratio = (best_size / in_size) if in_size > 0 else 0.0
 
     print("=== GCC Container v6 ===")
-    print(f"Layer/Codec    : {best_layer} / {best_codec}")
+    print(f"Layer/Codec    : {best['layer_id']} / {best['codec_id']}")
     print(f"File originale : {input_path} ({in_size} byte)")
-    print(f"File compresso : {output_path} ({out_size} byte)")
+    print(f"File compresso : {output_path} ({best_size} byte)")
     print(f"Rapporto       : {ratio:.3f} (1.0 = nessuna compressione)")
     print("========================")
 
+    return best
 def decompress_file_v6(input_path: str, output_path: str) -> None:
     from pathlib import Path
 
@@ -913,72 +989,118 @@ def _parse_stream_codecs_spec(spec: str | None) -> dict[int, str] | None:
     return out
 
 
+
+
 def compress_file_v7(
-    input_path: str,
-    output_path: str,
-    layer_id: str = "bytes",
-    codec_id: str = "zstd_tight",
+    engine: Engine,
+    input_path: Path,
+    output_path: Path,
+    layer_id: str = "split_text_nums",
+    codec_id: str = "zlib",
+    *,
     stream_codecs_spec: str | None = None,
-) -> None:
-    """c7: v6 + payload MBN (multi-stream).
+    force_mbn: bool = False,
+) -> dict[str, str]:
+    """Compress a single file into v6 or v6+MBN (c7).
 
-    RSS note: for layer_id='bytes' we avoid Path.read_bytes() and use mmap.
-
-    Layer supportati (attuali):
-      - bytes
-      - vc0
-      - split_text_nums (lossless: TEXT/NUMS)
-      - tpl_lines_v0 (lossless: TPL/IDS/NUMS)
+    P3-hard: for bytes+zstd when NOT using MBN, stream directly to disk.
     """
-    in_path = Path(input_path)
-    eng = Engine.default()
+    if layer_id not in LAYER_TO_CODE:
+        raise ValueError(f"layer_id sconosciuto: {layer_id}")
+    if codec_id not in CODEC_TO_CODE:
+        raise ValueError(f"codec_id sconosciuto: {codec_id}")
+    if codec_id not in engine.codecs:
+        raise ValueError(f"codec non disponibile: {codec_id}")
 
-    if layer_id not in ("bytes", "vc0", "split_text_nums", "tpl_lines_v0"):
-        raise ValueError("c7 per ora supporta solo layer_id=bytes/vc0/split_text_nums/tpl_lines_v0")
-    if codec_id not in ("zstd", "zstd_tight", "zlib", "raw", "num_v0", "num_v1"):
-        raise ValueError("c7 per ora supporta codec_id=zstd/zstd_tight/zlib/raw/num_v0/num_v1")
+    input_path = Path(input_path)
+    output_path = Path(output_path)
 
-    stream_codecs = _parse_stream_codecs_spec(stream_codecs_spec)
-    # default smart routing per split_text_nums: NUMS -> num_v1, TEXT -> codec_id
-    if layer_id == "split_text_nums" and stream_codecs is None:
-        stream_codecs = {
-            ST_TEXT: codec_id,
-            ST_NUMS: "num_v1",
-        }
-    # default smart routing per tpl_lines_v0: TPL -> codec_id, IDS/NUMS -> num_v1
-    if layer_id == "tpl_lines_v0" and stream_codecs is None:
-        stream_codecs = {
-            ST_TPL: codec_id,
-            ST_IDS: "num_v1",
-            ST_NUMS: "num_v1",
-        }
+    in_size = int(input_path.stat().st_size)
 
-    if layer_id == 'bytes':
-        with _read_bytes_or_mmap(in_path) as data:
-            blob = compress_v6_mbn(
-                eng, data, layer_id=layer_id, codec_id=codec_id, stream_codecs=stream_codecs
-            )
-    else:
-        data = in_path.read_bytes()
-        blob = compress_v6_mbn(
-            eng, data, layer_id=layer_id, codec_id=codec_id, stream_codecs=stream_codecs
+    want_stream = (
+        layer_id == "bytes"
+        and codec_id in ("zstd", "zstd_tight")
+        and not force_mbn
+        and not stream_codecs_spec
+    )
+
+    if want_stream:
+        out_size = _stream_container_v6_bytes_zstd(
+            engine=engine,
+            codec_id=codec_id,
+            input_path=input_path,
+            output_path=output_path,
         )
+        if out_size is None:
+            # fallback to legacy path
+            data = input_path.read_bytes()
+            blob = compress_v6(engine, data, layer_id=layer_id, codec_id=codec_id)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(blob)
+            out_size = len(blob)
 
-    Path(output_path).write_bytes(blob)
+        ratio = (out_size / in_size) if in_size > 0 else 0.0
+        print("=== GCC Container v6 ===")
+        print(f"Layer/Codec    : {layer_id} / {codec_id}")
+        print(f"File originale : {input_path} ({in_size} byte)")
+        print(f"File compresso : {output_path} ({out_size} byte)")
+        print(f"Rapporto       : {ratio:.3f} (1.0 = nessuna compressione)")
+        print("========================")
+        return {"layer_id": layer_id, "codec_id": codec_id}
 
-    in_size = int(in_path.stat().st_size)
+    # Legacy path (may load input into RAM)
+    data = input_path.read_bytes()
+
+    wants_mbn = bool(force_mbn or stream_codecs_spec)
+
+    if not wants_mbn:
+        blob = compress_v6(engine, data, layer_id=layer_id, codec_id=codec_id)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(blob)
+
+        out_size = len(blob)
+        ratio = (out_size / in_size) if in_size > 0 else 0.0
+
+        print("=== GCC Container v6 ===")
+        print(f"Layer/Codec    : {layer_id} / {codec_id}")
+        print(f"File originale : {input_path} ({in_size} byte)")
+        print(f"File compresso : {output_path} ({out_size} byte)")
+        print(f"Rapporto       : {ratio:.3f} (1.0 = nessuna compressione)")
+        print("========================")
+        return {"layer_id": layer_id, "codec_id": codec_id}
+
+    # v6 + MBN (c7)
+    streams, meta = compress_v6_mbn(
+        engine,
+        data,
+        layer_id=layer_id,
+        codec_id=codec_id,
+        stream_codecs_spec=stream_codecs_spec,
+    )
+    payload = pack_v6_mbn(streams, meta)
+
+    blob = pack_container_v6(
+        payload,
+        layer_id=layer_id,
+        codec_id="mbn",
+        meta=b"",
+        payload_len=len(payload),
+        is_extract=False,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(blob)
+
     out_size = len(blob)
-    ratio = out_size / in_size if in_size else 0.0
+    ratio = (out_size / in_size) if in_size > 0 else 0.0
+
     print("=== GCC Container v6 + MBN (c7) ===")
     print(f"Layer/Codec    : {layer_id} / {codec_id}")
-    if stream_codecs_spec:
-        print(f"Stream codecs  : {stream_codecs_spec}")
     print(f"File originale : {input_path} ({in_size} byte)")
     print(f"File compresso : {output_path} ({out_size} byte)")
     print(f"Rapporto       : {ratio:.3f} (1.0 = nessuna compressione)")
     print("===============================")
-
-
+    return {"layer_id": layer_id, "codec_id": codec_id}
 def decompress_file_v7(input_path: str, output_path: str) -> None:
     """d7: decompress 'universale' (v1..v6 + c7 MBN)."""
     blob = Path(input_path).read_bytes()
