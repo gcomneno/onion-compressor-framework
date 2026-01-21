@@ -1,6 +1,11 @@
 # GCC-OCF – Container v6 + Payload MBN
+Ultimo aggiornamento: 2026-01-21
 
 Questo documento descrive il **formato** del container v6 (`GCC` + versione 6) e del payload multi-stream **MBN**.
+
+Nota terminologica:
+- quando parlo di “payload”, intendo sempre **bytes a scatola chiusa** per il layer che li trasporta.
+- MBN è un modo di impacchettare più stream *dentro* il payload del container (Multi Bundle).
 
 Riferimenti implementativi:
 - `src/gcc_ocf/engine/container_v6.py`
@@ -13,8 +18,7 @@ Riferimenti implementativi:
 ## 1.1 Layout (byte-level)
 
 Il file v6 è:
-
-```
+````
 +----------------+--------------------+
 | HEADER (min 7) | PAYLOAD (resto)    |
 +----------------+--------------------+
@@ -22,18 +26,17 @@ Il file v6 è:
 
 ### Header minimo (7 byte)
 
-| Offset | Size | Campo | Tipo | Valore |
-|---:|---:|---|---|---|
-| 0 | 3 | magic | bytes | `b"GCC"` |
-| 3 | 1 | version | u8 | `6` |
-| 4 | 1 | flags | u8 | bitmask |
-| 5 | 1 | layer_code | u8 | vedi tabella |
-| 6 | 1 | codec_code | u8 | vedi tabella |
+|Ofs|Sze| Campo      |Tipo| Valore   |
+|---|---|------------|----|----------|
+| 0 | 3 | magic      | by | `b"GCC"` |
+| 3 | 1 | version    | u8 | `6`      |
+| 4 | 1 | flags      | u8 | bitmask  |
+| 5 | 1 | layer_code | u8 | vedi tab.|
+| 6 | 1 | codec_code | u8 | vedi tab.|
 
 ### Campi opzionali
 
 Dopo i 7 byte:
-
 - se `flags & 0x01` (**F_HAS_META**) → `varint(meta_len)` + `meta_bytes`
 - se `flags & 0x02` (**F_HAS_PAYLOAD_LEN**) → `varint(payload_len)` + `payload` (altrimenti il payload è “resto del file”)
 
@@ -41,11 +44,11 @@ Dopo i 7 byte:
 
 ### Flags
 
-| Flag | Bit | Significato |
-|---|---:|---|
-| `F_HAS_META` | `0x01` | presente un blocco meta subito dopo header |
-| `F_HAS_PAYLOAD_LEN` | `0x02` | presente payload_len varint (non usato di default) |
-| `F_KIND_EXTRACT` | `0x80` | payload è “extract” (lossy): non usare `decompress`, usare `extract-show` |
+| Flag                | Bit    | Significato                                                               |
+|---------------------|-------:|---------------------------------------------------------------------------|
+| `F_HAS_META`        | `0x01` | presente un blocco meta subito dopo header                                |
+| `F_HAS_PAYLOAD_LEN` | `0x02` | presente payload_len varint (non usato di default)                        |
+| `F_KIND_EXTRACT`    | `0x80` | payload è “extract” (lossy): non usare `decompress`, usare `extract-show` |
 
 ## 1.2 Mappature stabili (layer_code / codec_code)
 
@@ -54,8 +57,8 @@ Dopo i 7 byte:
 ### layer_code
 
 | layer_id | code |
-|---|---:|
-| `bytes` | 0 |
+|----------|-----:|
+| `bytes`  | 0 |
 | `syllables_it` | 1 |
 | `words_it` | 2 |
 | `vc0` | 3 |
@@ -85,7 +88,8 @@ Dopo i 7 byte:
 ## 2.1 Scopo
 
 MBN impacchetta **più stream** nello stesso container v6.
-Ogni stream ha:
+
+Ogni stream dichiara:
 - tipo (stype)
 - codec usato per comprimere quello stream
 - lunghezza uncompressed (ulen)
@@ -96,18 +100,18 @@ Ogni stream ha:
 
 ```
 MBN:
-  magic: 3B  "MBN"
-  nstreams: varint
-  repeat nstreams times:
-    stype: u8
-    codec: u8
-    ulen: varint
-    clen: varint
-    mlen: varint
-    meta: mlen bytes
-    comp: clen bytes
-```
+magic: 3B  "MBN"
+nstreams: varint
+repeat nstreams times:
+stype: u8
+codec: u8
+ulen: varint
+clen: varint
+mlen: varint
+meta: mlen bytes
+comp: clen bytes
 
+```
 - `codec` usa **gli stessi codec_code** del container v6.
 - `ulen` è la lunghezza del raw stream *prima* della compressione.
 
@@ -150,3 +154,6 @@ MBN:
 
 - Il decoder “universale” (d7) gestisce v1–v6 e v6+MBN.
 - I file marcati `F_KIND_EXTRACT` sono **lossy**: vanno letti con `extract-show` (non con `decompress`).
+```
+
+---
