@@ -12,10 +12,17 @@ Core: Huffman su byte, riusato da:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
 from pathlib import Path
+
+# Optional dependency: zstandard (used for bytes+zstd streaming fast-path)
+try:
+    import zstandard as zstd  # type: ignore
+except Exception:  # pragma: no cover
+    zstd = None  # type: ignore
 
 from gcc_ocf.core.bundle import EncodedStream, SymbolStream
 from gcc_ocf.core.codec_huffman import (
@@ -42,6 +49,7 @@ from gcc_ocf.core.num_stream import decode_ints, encode_ints
 from gcc_ocf.engine.container import Engine
 from gcc_ocf.engine.container_v6 import (
     CODEC_TO_CODE,
+    LAYER_TO_CODE,
     compress_v6,
     compress_v6_mbn,
     decompress_v6,
@@ -52,6 +60,49 @@ from gcc_ocf.layers.bytes import LayerBytes
 from gcc_ocf.layers.syllables_it import LayerSyllablesIT
 from gcc_ocf.layers.vc0 import LayerVC0
 from gcc_ocf.layers.words_it import LayerWordsIT
+
+# ---------------------------------------------------------------------------
+# Legacy-wrapper conveniences (anti-ruff + stable defaults)
+# ---------------------------------------------------------------------------
+
+# Deterministic defaults used by v6 candidate search helpers.
+DEFAULT_LAYER_IDS: list[str] = sorted(LAYER_TO_CODE.keys())
+DEFAULT_CODEC_IDS: list[str] = sorted(CODEC_TO_CODE.keys())
+
+
+def pack_v6_mbn(streams: list[MBNStream], meta: bytes | dict | None) -> bytes:
+    """Pack v6+MBN payload.
+
+    The engine-level helper may return extra `meta` out-of-band. For the legacy wrapper,
+    we embed it as a META stream (raw) when provided and not already present.
+    """
+    out_streams = list(streams)
+
+    meta_bytes: bytes | None
+    if meta is None:
+        meta_bytes = None
+    elif isinstance(meta, bytes):
+        meta_bytes = meta
+    else:
+        # Be tolerant: meta may be a dict (JSON-serializable) from older call sites.
+        meta_bytes = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    if meta_bytes:
+        has_meta = any(s.stype == ST_META for s in out_streams)
+        if not has_meta:
+            raw_code = int(CODEC_TO_CODE.get("raw", 3))
+            out_streams.append(
+                MBNStream(
+                    stype=ST_META,
+                    codec=raw_code,
+                    ulen=len(meta_bytes),
+                    comp=meta_bytes,
+                    meta=b"",
+                )
+            )
+
+    return pack_mbn(out_streams)
+
 
 MAGIC = b"GCC"
 BUNDLE_MAGIC = b"HBN1"  # Huffman Bundle v1
@@ -768,8 +819,6 @@ def _split_csv(s: str) -> list[str]:
     return [x.strip() for x in (s or "").split(",") if x.strip()]
 
 
-
-
 def _stream_container_v6_bytes_zstd(
     *,
     engine: Engine,
@@ -907,7 +956,9 @@ def compress_file_v6(
             except Exception as e:
                 # Try next candidate.
                 if os.environ.get("VERBOSE") == "1":
-                    print(f"[diag] compress_file_v6 skip {layer_id}/{codec_id}: {e}", file=sys.stderr)
+                    print(
+                        f"[diag] compress_file_v6 skip {layer_id}/{codec_id}: {e}", file=sys.stderr
+                    )
                 continue
 
     if best is None or best_tmp is None or best_size is None:
@@ -935,6 +986,8 @@ def compress_file_v6(
     print("========================")
 
     return best
+
+
 def decompress_file_v6(input_path: str, output_path: str) -> None:
     from pathlib import Path
 
@@ -987,8 +1040,6 @@ def _parse_stream_codecs_spec(spec: str | None) -> dict[int, str] | None:
 
         out[code] = v
     return out
-
-
 
 
 def compress_file_v7(
@@ -1101,6 +1152,8 @@ def compress_file_v7(
     print(f"Rapporto       : {ratio:.3f} (1.0 = nessuna compressione)")
     print("===============================")
     return {"layer_id": layer_id, "codec_id": codec_id}
+
+
 def decompress_file_v7(input_path: str, output_path: str) -> None:
     """d7: decompress 'universale' (v1..v6 + c7 MBN)."""
     blob = Path(input_path).read_bytes()
@@ -1538,17 +1591,27 @@ def main(argv: list[str]) -> int:
     elif mode == "d5":
         decompress_file_v5(inp, out)
     elif mode == "c6":
-        layer_id = argv[4] if len(argv) >= 5 else "bytes"
-        codec_id = argv[5] if len(argv) >= 6 else "huffman"
-        compress_file_v6(inp, out, layer_id=layer_id, codec_id=codec_id)
+        # NOTE: legacy CLI path kept as-is (wrapper historically drifted).
+        eng = Engine.default()
+        layer_csv = argv[4] if len(argv) >= 5 else ",".join(DEFAULT_LAYER_IDS) or "bytes"
+        codec_csv = argv[5] if len(argv) >= 6 else ",".join(DEFAULT_CODEC_IDS) or "zlib"
+        layer_ids = _split_csv(layer_csv)
+        codec_ids = _split_csv(codec_csv)
+        compress_file_v6(eng, Path(inp), Path(out), layer_ids=layer_ids, codec_ids=codec_ids)
     elif mode == "d6":
         decompress_file_v6(inp, out)
     elif mode == "c7":
+        eng = Engine.default()
         layer_id = argv[4] if len(argv) >= 5 else "bytes"
         codec_id = argv[5] if len(argv) >= 6 else "zstd_tight"
         stream_codecs = argv[6] if len(argv) >= 7 else None
         compress_file_v7(
-            inp, out, layer_id=layer_id, codec_id=codec_id, stream_codecs_spec=stream_codecs
+            eng,
+            Path(inp),
+            Path(out),
+            layer_id=layer_id,
+            codec_id=codec_id,
+            stream_codecs_spec=stream_codecs,
         )
     elif mode == "d7":
         decompress_file_v7(inp, out)
