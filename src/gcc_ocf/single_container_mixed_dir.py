@@ -34,7 +34,7 @@ import tempfile
 from pathlib import Path
 from typing import IO, Final
 
-from gcc_ocf.dir_index import DirBundleIndexV1, SPEC_INDEX_V1
+from gcc_ocf.dir_index import SPEC_INDEX_V1, DirBundleIndexV1
 from gcc_ocf.errors import CorruptPayload, HashMismatch, UsageError
 from gcc_ocf.verify import verify_container_file
 

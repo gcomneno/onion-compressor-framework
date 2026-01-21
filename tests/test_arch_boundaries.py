@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 # High-level orchestrator modules (Layer 3).
 # LOW-level code (core/engine/layers/legacy/...) must NEVER import these.
@@ -85,7 +85,9 @@ def _iter_import_edges(src_dir: Path) -> Iterable[ImportEdge]:
                 for alias in node.names:
                     name = alias.name
                     if name.startswith(PACKAGE_ROOT + ".") or name == PACKAGE_ROOT:
-                        yield ImportEdge(src=mod, dst=name, file=py, lineno=getattr(node, "lineno", 0))
+                        yield ImportEdge(
+                            src=mod, dst=name, file=py, lineno=getattr(node, "lineno", 0)
+                        )
 
             elif isinstance(node, ast.ImportFrom):
                 if node.module is None and node.level == 0:
@@ -94,7 +96,9 @@ def _iter_import_edges(src_dir: Path) -> Iterable[ImportEdge]:
                 if not abs_mod:
                     continue
                 if abs_mod.startswith(PACKAGE_ROOT + ".") or abs_mod == PACKAGE_ROOT:
-                    yield ImportEdge(src=mod, dst=abs_mod, file=py, lineno=getattr(node, "lineno", 0))
+                    yield ImportEdge(
+                        src=mod, dst=abs_mod, file=py, lineno=getattr(node, "lineno", 0)
+                    )
 
 
 def test_no_low_level_imports_orchestrator() -> None:

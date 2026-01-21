@@ -375,7 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(p_dir_v)
 
     p_pack = sub_dir.add_parser(
-        "pack", help="Pack a directory into an output directory (manifest + per-bucket .gca) or single-container modes"
+        "pack",
+        help="Pack a directory into an output directory (manifest + per-bucket .gca) or single-container modes",
     )
     p_pack.add_argument("input_dir", type=Path)
     p_pack.add_argument("output_dir", type=Path)
@@ -511,7 +512,9 @@ def main(argv: list[str] | None = None) -> int:
             if ns.dir_cmd == "unpack":
                 return _semantic_dir_unpack(ns.input_dir, ns.restore_dir)
             if ns.dir_cmd == "verify":
-                return _semantic_dir_verify(ns.input_dir, full=bool(ns.full), json_out=bool(ns.json))
+                return _semantic_dir_verify(
+                    ns.input_dir, full=bool(ns.full), json_out=bool(ns.json)
+                )
             raise AssertionError("unreachable")
 
         if ns.cmd == "legacy":

@@ -176,8 +176,12 @@ def _parse_manifest_file_rec(rec: dict[str, Any]) -> _ManifestFileRec | None:
     arch = rec.get("archive")
     a = str(arch) if arch else None
     bucket = _as_int(rec.get("bucket") or 0, where=f"manifest.bucket malformato per {r}")
-    off = _as_int(rec.get("archive_offset") or 0, where=f"manifest.archive_offset malformato per {r}")
-    ln = _as_int(rec.get("archive_length") or 0, where=f"manifest.archive_length malformato per {r}")
+    off = _as_int(
+        rec.get("archive_offset") or 0, where=f"manifest.archive_offset malformato per {r}"
+    )
+    ln = _as_int(
+        rec.get("archive_length") or 0, where=f"manifest.archive_length malformato per {r}"
+    )
 
     sha = rec.get("blob_sha256")
     blob_sha = None
@@ -348,7 +352,9 @@ def verify_packed_dir(
                         exp_sha = str(
                             (bs.bucket_resources_meta.get(name) or {}).get("blob_sha256") or ""
                         )
-                        got_sha = str((res.get(name) or {}).get("meta", {}).get("blob_sha256") or "")
+                        got_sha = str(
+                            (res.get(name) or {}).get("meta", {}).get("blob_sha256") or ""
+                        )
                         if exp_sha and got_sha and exp_sha != got_sha:
                             raise HashMismatch(f"resource sha mismatch: {arch} {name}")
 
@@ -357,15 +363,21 @@ def verify_packed_dir(
                             e = by_rel.get(res_rel)
                             if e is None:
                                 # fallback: some writers may store resource rel differently; off/len not known here
-                                raise CorruptPayload(f"resource entry mancante in {arch}: {res_rel}")
+                                raise CorruptPayload(
+                                    f"resource entry mancante in {arch}: {res_rel}"
+                                )
 
                             if e.length > 0:
                                 recomputed, recomputed_crc = rd.sha256_crc32_blob(
                                     e.offset, e.length, chunk_size=chunk_size
                                 )
                                 if recomputed != exp_sha:
-                                    raise HashMismatch(f"resource blob hash mismatch: {arch} {name}")
-                                if e.blob_crc32 is not None and int(recomputed_crc) != int(e.blob_crc32):
+                                    raise HashMismatch(
+                                        f"resource blob hash mismatch: {arch} {name}"
+                                    )
+                                if e.blob_crc32 is not None and int(recomputed_crc) != int(
+                                    e.blob_crc32
+                                ):
                                     raise HashMismatch(f"resource blob CRC mismatch: {arch} {name}")
 
 

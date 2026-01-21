@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Iterable
+from typing import Any, Final
 
 from gcc_ocf.errors import CorruptPayload
 
@@ -18,7 +19,7 @@ class DirIndexEntry:
     sha256: str
 
     @staticmethod
-    def from_dict(raw: Any) -> "DirIndexEntry":
+    def from_dict(raw: Any) -> DirIndexEntry:
         if not isinstance(raw, dict):
             raise CorruptPayload(f"bundle index entry invalida (non dict): {raw}")
 
@@ -45,7 +46,12 @@ class DirIndexEntry:
         return DirIndexEntry(rel=rel, offset=off_i, length=ln_i, sha256=sha)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"rel": self.rel, "offset": self.offset, "length": self.length, "sha256": self.sha256}
+        return {
+            "rel": self.rel,
+            "offset": self.offset,
+            "length": self.length,
+            "sha256": self.sha256,
+        }
 
 
 @dataclass
@@ -75,8 +81,6 @@ class DirBundleIndexV1:
     files: list[DirIndexEntry]
     stream_codecs_used: str | None = None
 
-    # --- Manual-style API ---
-
     def put(self, name: str, offset: int, length: int, sha256: str) -> None:
         self.files.append(DirIndexEntry(rel=name, offset=offset, length=length, sha256=sha256))
 
@@ -89,10 +93,7 @@ class DirBundleIndexV1:
     def iter_entries(self) -> Iterable[DirIndexEntry]:
         return iter(self.files)
 
-    # --- Serialization ---
-
     def to_dict(self) -> dict[str, Any]:
-        # Keep key order stable (human-friendly diffs)
         d: dict[str, Any] = {
             "spec": SPEC_INDEX_V1,
             "root": self.root,
@@ -111,7 +112,7 @@ class DirBundleIndexV1:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent).encode("utf-8")
 
     @classmethod
-    def deserialize(cls, data: bytes) -> "DirBundleIndexV1":
+    def deserialize(cls, data: bytes) -> DirBundleIndexV1:
         try:
             raw = json.loads(data.decode("utf-8"))
         except Exception as e:
@@ -119,7 +120,7 @@ class DirBundleIndexV1:
         return cls.from_dict(raw)
 
     @classmethod
-    def from_dict(cls, raw: Any) -> "DirBundleIndexV1":
+    def from_dict(cls, raw: Any) -> DirBundleIndexV1:
         if not isinstance(raw, dict):
             raise CorruptPayload("bundle index invalido (non dict)")
 
@@ -151,8 +152,9 @@ class DirBundleIndexV1:
         if "count" in raw:
             try:
                 cnt = int(raw.get("count"))
-            except Exception:
-                raise CorruptPayload("bundle index invalido (count non int)")
+            except Exception as e:
+                # B904 fix: preserve exception context
+                raise CorruptPayload("bundle index invalido (count non int)") from e
             if cnt != len(files):
                 raise CorruptPayload("bundle index invalido (count mismatch)")
 
@@ -170,10 +172,8 @@ class DirBundleIndexV1:
             stream_codecs_used=stream_codecs_used,
         )
 
-    # --- File helpers ---
-
     @classmethod
-    def read(cls, path: Path, *, expected_kind: str | None = None) -> "DirBundleIndexV1":
+    def read(cls, path: Path, *, expected_kind: str | None = None) -> DirBundleIndexV1:
         p = Path(path)
         if not p.is_file():
             raise CorruptPayload(f"bundle index non trovato: {p}")
@@ -183,4 +183,4 @@ class DirBundleIndexV1:
         return idx
 
     def write(self, path: Path, *, indent: int = 2) -> None:
-        Path(path).write_text(self.serialize(indent=indent).decode("utf-8"), encoding="utf-8")
+        Path(path).write_bytes(self.serialize(indent=indent))

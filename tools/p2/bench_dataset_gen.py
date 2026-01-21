@@ -210,11 +210,17 @@ def _generate_bigfile_single(root: Path, rng: random.Random, big_mb: int) -> tup
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Generate deterministic datasets for P2 bench/torture.")
-    ap.add_argument("--out", required=True, help="Output root directory (datasets will be created under it).")
+    ap = argparse.ArgumentParser(
+        description="Generate deterministic datasets for P2 bench/torture."
+    )
+    ap.add_argument(
+        "--out", required=True, help="Output root directory (datasets will be created under it)."
+    )
     ap.add_argument("--preset", required=True, choices=sorted(PRESETS))
     ap.add_argument("--seed", type=int, default=1337, help="Deterministic seed.")
-    ap.add_argument("--big-mb", type=int, default=250, help="For bigfile_single: size per big file in MB.")
+    ap.add_argument(
+        "--big-mb", type=int, default=250, help="For bigfile_single: size per big file in MB."
+    )
     args = ap.parse_args()
 
     out_root = Path(args.out).expanduser().resolve()

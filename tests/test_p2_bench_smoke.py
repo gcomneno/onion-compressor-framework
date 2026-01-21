@@ -22,7 +22,14 @@ def test_p2_run_bench_smoke(tmp_path: Path) -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     gen = _run(
-        ["python3", "tools/p2/bench_dataset_gen.py", "--out", str(out_root), "--preset", "tiny_smoke"],
+        [
+            "python3",
+            "tools/p2/bench_dataset_gen.py",
+            "--out",
+            str(out_root),
+            "--preset",
+            "tiny_smoke",
+        ],
         cwd=Path.cwd(),
     )
     assert gen.returncode == 0, f"dataset_gen failed\nstdout:\n{gen.stdout}\nstderr:\n{gen.stderr}"
@@ -31,4 +38,6 @@ def test_p2_run_bench_smoke(tmp_path: Path) -> None:
     assert (ds / "in").is_dir()
 
     bench = _run(["bash", "tools/p2/run_bench.sh", str(ds), "--buckets", "4"], cwd=Path.cwd())
-    assert bench.returncode == 0, f"run_bench failed\nstdout:\n{bench.stdout}\nstderr:\n{bench.stderr}"
+    assert bench.returncode == 0, (
+        f"run_bench failed\nstdout:\n{bench.stdout}\nstderr:\n{bench.stderr}"
+    )

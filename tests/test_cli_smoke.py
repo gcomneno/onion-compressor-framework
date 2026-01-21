@@ -105,8 +105,14 @@ def test_cli_dir_pack_unpack_verify_and_tamper_exit_13(tmp_path: Path) -> None:
 
     # Tamper: flip one byte inside a blob area as per manifest offsets.
     manifest = out_dir / "manifest.jsonl"
-    recs = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
-    file_rec = next(rr for rr in recs if isinstance(rr, dict) and rr.get("rel") and rr.get("archive"))
+    recs = [
+        json.loads(line)
+        for line in manifest.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    file_rec = next(
+        rr for rr in recs if isinstance(rr, dict) and rr.get("rel") and rr.get("archive")
+    )
 
     arch = out_dir / str(file_rec["archive"])
     off = int(file_rec["archive_offset"])

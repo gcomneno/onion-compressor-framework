@@ -100,7 +100,9 @@ def test_determinism_mixed_single_container_indexes(tmp_path: Path) -> None:
 
     idx1_text = (out1 / "bundle_text_index.json").read_bytes()
     idx2_text = (out2 / "bundle_text_index.json").read_bytes()
-    assert idx1_text == idx2_text, "bundle_text_index.json deve essere identico (determinismo mixed)"
+    assert idx1_text == idx2_text, (
+        "bundle_text_index.json deve essere identico (determinismo mixed)"
+    )
 
     idx1_bin = (out1 / "bundle_bin_index.json").read_bytes()
     idx2_bin = (out2 / "bundle_bin_index.json").read_bytes()

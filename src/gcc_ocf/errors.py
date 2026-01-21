@@ -33,11 +33,25 @@ class ExitCodeInfo:
 
 EXIT_CODES: tuple[ExitCodeInfo, ...] = (
     ExitCodeInfo(EXIT_OK, "OK", "Success"),
-    ExitCodeInfo(EXIT_USAGE, "USAGE", "Usage/config error (invalid args, invalid pipeline spec, etc.)"),
-    ExitCodeInfo(EXIT_GENERIC, "GENERIC", "Generic failure (corrupt payload, unexpected error, etc.)"),
-    ExitCodeInfo(EXIT_UNSUPPORTED_VERSION, "UNSUPPORTED_VERSION", "Unsupported container/archive version"),
-    ExitCodeInfo(EXIT_MISSING_RESOURCE, "MISSING_RESOURCE", "Missing required resource (e.g. bucket-level dict)"),
-    ExitCodeInfo(EXIT_HASH_MISMATCH, "HASH_MISMATCH", "Integrity failure (hash/CRC mismatch, tamper detected)"),
+    ExitCodeInfo(
+        EXIT_USAGE, "USAGE", "Usage/config error (invalid args, invalid pipeline spec, etc.)"
+    ),
+    ExitCodeInfo(
+        EXIT_GENERIC, "GENERIC", "Generic failure (corrupt payload, unexpected error, etc.)"
+    ),
+    ExitCodeInfo(
+        EXIT_UNSUPPORTED_VERSION, "UNSUPPORTED_VERSION", "Unsupported container/archive version"
+    ),
+    ExitCodeInfo(
+        EXIT_MISSING_RESOURCE,
+        "MISSING_RESOURCE",
+        "Missing required resource (e.g. bucket-level dict)",
+    ),
+    ExitCodeInfo(
+        EXIT_HASH_MISMATCH,
+        "HASH_MISMATCH",
+        "Integrity failure (hash/CRC mismatch, tamper detected)",
+    ),
 )
 
 # For convenience (fast lookup)

@@ -188,15 +188,23 @@ def _ok(res: subprocess.CompletedProcess[str]) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="GCC-OCF robust general smoke tests (file+dir)")
     ap.add_argument("--iters", type=int, default=10, help="Number of iterations (default: 10)")
-    ap.add_argument("--seed", type=int, default=12345, help="Deterministic RNG seed (default: 12345)")
+    ap.add_argument(
+        "--seed", type=int, default=12345, help="Deterministic RNG seed (default: 12345)"
+    )
     ap.add_argument("--files", type=int, default=20, help="Files per directory tree (default: 20)")
-    ap.add_argument("--max-bytes", type=int, default=200_000, help="Max binary file size (default: 200000)")
+    ap.add_argument(
+        "--max-bytes", type=int, default=200_000, help="Max binary file size (default: 200000)"
+    )
     ap.add_argument("--buckets", type=int, default=8, help="Buckets for dir pack (default: 8)")
-    ap.add_argument("--unicode", action="store_true", help="Include unicode + very long lines in generated text")
+    ap.add_argument(
+        "--unicode", action="store_true", help="Include unicode + very long lines in generated text"
+    )
     ap.add_argument("--keep", action="store_true", help="Keep temp workdir on exit")
     ap.add_argument("--workdir", type=Path, default=None, help="Optional workdir (default: temp)")
     ap.add_argument("--json-out", type=Path, default=None, help="Write JSON report to file")
-    ap.add_argument("--python", dest="pyexe", default=sys.executable, help="Python executable to use")
+    ap.add_argument(
+        "--python", dest="pyexe", default=sys.executable, help="Python executable to use"
+    )
     ns = ap.parse_args()
 
     rng = random.Random(ns.seed)
@@ -222,7 +230,9 @@ def main() -> int:
     }
 
     def add_step(name: str, res: subprocess.CompletedProcess[str]) -> None:
-        step = StepResult(name=name, ok=_ok(res), rc=res.returncode, stdout=res.stdout, stderr=res.stderr)
+        step = StepResult(
+            name=name, ok=_ok(res), rc=res.returncode, stdout=res.stdout, stderr=res.stderr
+        )
         report["steps"].append(step.__dict__)
         if not step.ok:
             report["ok"] = False
@@ -270,14 +280,21 @@ def main() -> int:
 
             add_step(
                 f"it{it:03d}_file_compress_pipeline",
-                run_cli("file", "compress", str(file_in), str(file_out), "--pipeline", pipeline_spec),
+                run_cli(
+                    "file", "compress", str(file_in), str(file_out), "--pipeline", pipeline_spec
+                ),
             )
-            add_step(f"it{it:03d}_file_verify_json", run_cli("file", "verify", str(file_out), "--json"))
+            add_step(
+                f"it{it:03d}_file_verify_json", run_cli("file", "verify", str(file_out), "--json")
+            )
             add_step(
                 f"it{it:03d}_file_verify_json_full",
                 run_cli("file", "verify", str(file_out), "--json", "--full"),
             )
-            add_step(f"it{it:03d}_file_decompress", run_cli("file", "decompress", str(file_out), str(file_back)))
+            add_step(
+                f"it{it:03d}_file_decompress",
+                run_cli("file", "decompress", str(file_out), str(file_back)),
+            )
 
             if file_back.is_file() and file_in.read_bytes() != file_back.read_bytes():
                 report["ok"] = False
@@ -295,12 +312,16 @@ def main() -> int:
                 f"it{it:03d}_dir_pack",
                 run_cli("dir", "pack", str(in_dir), str(out_dir), "--buckets", str(ns.buckets)),
             )
-            add_step(f"it{it:03d}_dir_verify_json", run_cli("dir", "verify", str(out_dir), "--json"))
+            add_step(
+                f"it{it:03d}_dir_verify_json", run_cli("dir", "verify", str(out_dir), "--json")
+            )
             add_step(
                 f"it{it:03d}_dir_verify_json_full",
                 run_cli("dir", "verify", str(out_dir), "--json", "--full"),
             )
-            add_step(f"it{it:03d}_dir_unpack", run_cli("dir", "unpack", str(out_dir), str(back_dir)))
+            add_step(
+                f"it{it:03d}_dir_unpack", run_cli("dir", "unpack", str(out_dir), str(back_dir))
+            )
 
             if back_dir.is_dir():
                 dig_in = _tree_digest(in_dir)
@@ -326,7 +347,7 @@ def main() -> int:
                                 "ok": False,
                                 "rc": 1,
                                 "stdout": "",
-                                "stderr": f"Directory roundtrip mismatch (sha256 differ): {mism[:5]}{'...' if len(mism)>5 else ''}",
+                                "stderr": f"Directory roundtrip mismatch (sha256 differ): {mism[:5]}{'...' if len(mism) > 5 else ''}",
                             }
                         )
 
@@ -370,7 +391,9 @@ def main() -> int:
 
         if ns.json_out:
             ns.json_out.parent.mkdir(parents=True, exist_ok=True)
-            ns.json_out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            ns.json_out.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
         print(
             json.dumps(

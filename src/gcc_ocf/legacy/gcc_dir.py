@@ -1490,12 +1490,12 @@ def unpackdir(output_dir: Path, restore_dir: Path) -> None:
                 continue
 
             # Empty-file invariant: always restore empty files without decoding.
-            in_size = int(rec.get('in_size') or 0)
-            sha = str(rec.get('sha256') or rec.get('in_sha256') or '')
+            in_size = int(rec.get("in_size") or 0)
+            sha = str(rec.get("sha256") or rec.get("in_sha256") or "")
             if in_size == 0 and sha == EMPTY_SHA256:
                 dst_path = restore_dir / rel
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
-                dst_path.write_bytes(b'')
+                dst_path.write_bytes(b"")
                 n_ok += 1
                 continue
             try:

@@ -25,7 +25,7 @@ import hashlib
 from pathlib import Path
 from typing import Final
 
-from gcc_ocf.dir_index import DirBundleIndexV1, SPEC_INDEX_V1
+from gcc_ocf.dir_index import SPEC_INDEX_V1, DirBundleIndexV1
 from gcc_ocf.errors import CorruptPayload, HashMismatch, UsageError
 from gcc_ocf.verify import verify_container_file
 
@@ -101,7 +101,9 @@ def _decompress_gcc_universal(blob: bytes) -> bytes:
     raise CorruptPayload(f"Versione GCC non supportata: {ver}")
 
 
-def pack_single_container_dir(input_dir: Path, output_dir: Path, *, keep_concat: bool = False) -> None:
+def pack_single_container_dir(
+    input_dir: Path, output_dir: Path, *, keep_concat: bool = False
+) -> None:
     inp = Path(input_dir)
     out = Path(output_dir)
     if not inp.is_dir():

@@ -201,7 +201,9 @@ def verify_dir_success(out_dir: Path, full: bool) -> dict:
     return data
 
 
-def verify_dir_maybe_fail(out_dir: Path, full: bool) -> tuple[subprocess.CompletedProcess[str], dict | None]:
+def verify_dir_maybe_fail(
+    out_dir: Path, full: bool
+) -> tuple[subprocess.CompletedProcess[str], dict | None]:
     args = ["dir", "verify", str(out_dir)]
     if full:
         args.append("--full")
