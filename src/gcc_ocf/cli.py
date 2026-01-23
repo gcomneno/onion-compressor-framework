@@ -2,7 +2,7 @@
 
 This is the stable CLI entrypoint (console-script: ``gcc-ocf``).
 
-UX policy:
+UX policy:a
   - The default CLI is *semantic* (layer/codec/options). No c7/d7 names.
   - Legacy modes remain available under ``gcc-ocf legacy ...``.
 
@@ -242,6 +242,8 @@ def _semantic_dir_pack(
     single_container_mixed: bool = False,
     keep_concat: bool = False,
     jobs: int = 1,
+    report: bool = False,
+    report_json: bool = False,
 ) -> int:
     if single_container_mixed:
         from gcc_ocf.single_container_mixed_dir import pack_single_container_mixed_dir
@@ -264,7 +266,20 @@ def _semantic_dir_pack(
         if buckets is not None
         else (int(dir_spec.buckets) if dir_spec and dir_spec.buckets is not None else 16)
     )
-    packdir(input_dir, output_dir, buckets=b, dir_spec=dir_spec, jobs=int(jobs))
+    # Report flags are best-effort and only meaningful for classic mode.
+    # Keep backward compatibility if legacy packdir doesn't yet accept these kwargs.
+    try:
+        packdir(
+            input_dir,
+            output_dir,
+            buckets=b,
+            dir_spec=dir_spec,
+            jobs=int(jobs),
+            print_report=bool(report),
+            print_report_json=bool(report_json),
+        )
+    except TypeError:
+        packdir(input_dir, output_dir, buckets=b, dir_spec=dir_spec, jobs=int(jobs))
     return 0
 
 
@@ -422,6 +437,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="(single-container*) Keep the intermediate bundle*.concat file(s) in the output directory",
     )
 
+    # Classic mode (manifest + GCA1 buckets) aggregated mini-report.
+    p_pack.add_argument(
+        "--report",
+        action="store_true",
+        help="(classic) Print aggregated mini-report to stdout (also written to output_dir/pack_report.txt).",
+    )
+    p_pack.add_argument(
+        "--report-json",
+        action="store_true",
+        help="(classic) Print aggregated mini-report JSON to stdout (also written to output_dir/pack_report.json).",
+    )
+
     _add_common_args(p_pack)
 
     p_unpack = sub_dir.add_parser(
@@ -508,6 +535,8 @@ def main(argv: list[str] | None = None) -> int:
                     single_container_mixed=bool(getattr(ns, "single_container_mixed", False)),
                     keep_concat=bool(getattr(ns, "keep_concat", False)),
                     jobs=ns.jobs,
+                    report=bool(getattr(ns, "report", False)),
+                    report_json=bool(getattr(ns, "report_json", False)),
                 )
             if ns.dir_cmd == "unpack":
                 return _semantic_dir_unpack(ns.input_dir, ns.restore_dir)

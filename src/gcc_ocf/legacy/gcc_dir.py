@@ -117,6 +117,307 @@ class Plan:
     note: str = ""
 
 
+def _norm_ext(rel: str) -> str:
+    ext = Path(rel).suffix.lower()
+    return ext if ext else "(none)"
+
+
+def _bytes_h(n: int) -> str:
+    if n < 0:
+        return str(n)
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    f = float(n)
+    u = 0
+    while f >= 1024.0 and u < len(units) - 1:
+        f /= 1024.0
+        u += 1
+    if u == 0:
+        return f"{int(f)} {units[u]}"
+    return f"{f:.2f} {units[u]}"
+
+
+def _plan_key(
+    layer_id: str, codec_text: str, stream_codecs: dict[int, str] | None, note: str
+) -> str:
+    sc_part = ""
+    if stream_codecs:
+        items = sorted(((int(k), str(v)) for k, v in stream_codecs.items()), key=lambda kv: kv[0])
+        sc_part = ";streams=" + ",".join([f"{k}:{v}" for k, v in items])
+    note = str(note or "").strip()
+    note_part = f";note={note}" if note else ""
+    return f"{layer_id}+{codec_text}{sc_part}{note_part}"
+
+
+def _safe_int(x: object, default: int = 0) -> int:
+    try:
+        return int(x)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def _safe_float(x: object, default: float = 0.0) -> float:
+    try:
+        if x is None:
+            return default
+        return float(x)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def _safe_stream_codecs(d: object) -> dict[int, str]:
+    out: dict[int, str] = {}
+    if not isinstance(d, dict):
+        return out
+    for k, v in d.items():
+        try:
+            ik = int(k)  # type: ignore[arg-type]
+        except Exception:
+            continue
+        out[ik] = str(v)
+    return out
+
+
+def _top_rows(stats: dict[str, dict[str, int]], *, k: int = 10) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key, v in stats.items():
+        in_b = int(v.get("in", 0))
+        out_b = int(v.get("out", 0))
+        saved = in_b - out_b
+        ratio = float(out_b / in_b) if in_b else 0.0
+        rows.append(
+            {
+                "key": key,
+                "files": int(v.get("files", 0)),
+                "in": in_b,
+                "out": out_b,
+                "saved": saved,
+                "ratio": ratio,
+            }
+        )
+    rows.sort(key=lambda r: (-(int(r["saved"])), int(r["out"]), str(r["key"])))
+    return rows[: max(0, int(k))]
+
+
+def _write_pack_report(
+    *,
+    input_dir: Path,
+    output_dir: Path,
+    buckets: int,
+    files_ok: int,
+    files_fail: int,
+    total_in_blobs: int,
+    total_out_blobs: int,
+    manifest_path: Path,
+    bucket_types: dict[int, str],
+    bucket_metrics: dict[int, dict[str, float]],
+    plans: dict[int, Plan],
+    runners: dict[int, Plan | None],
+    bucket_autopick: dict[int, list[dict]],
+    bucket_num_res: dict[int, dict],
+    bucket_tpl_res: dict[int, dict],
+    ext_stats: dict[str, dict[str, int]],
+    plan_stats: dict[str, dict[str, int]],
+    bucket_stats: dict[int, dict[str, int]],
+    bucket_ext_stats: dict[int, dict[str, dict[str, int]]],
+    error_rows: list[dict[str, Any]],
+) -> None:
+    # Disk size accounting (best-effort, deterministic).
+    gca_sizes: dict[int, int] = {}
+    gca_total = 0
+    for p in sorted(output_dir.glob(f"{ARCHIVE_PREFIX}*{ARCHIVE_SUFFIX}")):
+        name = p.name
+        # bucket_XX.gca
+        try:
+            idx = int(name[len(ARCHIVE_PREFIX) : len(ARCHIVE_PREFIX) + 2])
+        except Exception:
+            continue
+        try:
+            sz = int(p.stat().st_size)
+        except Exception:
+            sz = 0
+        gca_sizes[idx] = sz
+        gca_total += sz
+
+    try:
+        manifest_bytes = int(manifest_path.stat().st_size)
+    except Exception:
+        manifest_bytes = 0
+
+    # write report objects
+    overall_ratio = float(total_out_blobs / total_in_blobs) if total_in_blobs else 0.0
+
+    # buckets detail
+    buckets_detail: dict[str, Any] = {}
+    top_buckets_rows: list[dict[str, Any]] = []
+
+    for b in sorted(set(bucket_types.keys()) | set(bucket_stats.keys())):
+        in_b = int(bucket_stats.get(b, {}).get("in", 0))
+        out_b = int(bucket_stats.get(b, {}).get("out", 0))
+        saved = in_b - out_b
+        ratio = float(out_b / in_b) if in_b else 0.0
+        btype = str(bucket_types.get(b, ""))
+        plan = plans.get(b)
+        runner = runners.get(b)
+
+        # resources
+        res_names: list[str] = []
+        res_meta: dict[str, Any] = {}
+        if b in bucket_num_res:
+            rr = bucket_num_res[b]
+            res_names.append(NUM_DICT_NAME)
+            res_meta[NUM_DICT_NAME] = {
+                "blob_sha256": str(rr.get("blob_sha256") or ""),
+                "k": int(rr.get("k", 0)),
+                "tag8_hex": bytes(rr.get("tag8", b"")).hex(),
+            }
+        if b in bucket_tpl_res:
+            tr = bucket_tpl_res[b]
+            res_names.append(TPL_DICT_NAME)
+            res_meta[TPL_DICT_NAME] = {
+                "blob_sha256": str(tr.get("blob_sha256") or ""),
+                "k": int(tr.get("k", 0)),
+                "tag8_hex": bytes(tr.get("tag8", b"")).hex(),
+                **(tr.get("meta") or {}),
+            }
+
+        # autopick candidates: keep only ok, best-first by score/ratio
+        cands = bucket_autopick.get(b, [])
+        ok_cands = [c for c in cands if isinstance(c, dict) and c.get("ok") is True]
+        ok_cands.sort(
+            key=lambda c: (_safe_float(c.get("score"), 1e9), _safe_float(c.get("ratio"), 1e9))
+        )
+        top3 = ok_cands[:3]
+        selected_by = "autopick" if cands else "heuristic"
+
+        # extensions per bucket (top)
+        ext_rows: list[dict[str, Any]] = []
+        for ext, v in (bucket_ext_stats.get(b) or {}).items():
+            in2 = int(v.get("in", 0))
+            out2 = int(v.get("out", 0))
+            ext_rows.append(
+                {
+                    "ext": str(ext),
+                    "files": int(v.get("files", 0)),
+                    "in": in2,
+                    "out": out2,
+                    "saved": in2 - out2,
+                    "ratio": float(out2 / in2) if in2 else 0.0,
+                }
+            )
+        ext_rows.sort(key=lambda r: (-(int(r["saved"])), str(r["ext"])))
+        ext_rows = ext_rows[:10]
+
+        buckets_detail[f"{b:02d}"] = {
+            "bucket": int(b),
+            "bucket_type": btype,
+            "metrics": dict(bucket_metrics.get(b, {})),
+            "gca_bytes": int(gca_sizes.get(b, 0)),
+            "files": int(bucket_stats.get(b, {}).get("files", 0)),
+            "in": in_b,
+            "out": out_b,
+            "saved": saved,
+            "ratio": ratio,
+            "chosen": _plan_to_dict(plan) if plan is not None else None,
+            "runner_up": _plan_to_dict(runner) if runner is not None else None,
+            "bucket_resources": res_names,
+            "bucket_resources_meta": res_meta,
+            "extensions": ext_rows,
+            "why": {
+                "selected_by": selected_by,
+                "top_candidates": top3,
+            },
+        }
+
+        top_buckets_rows.append(
+            {
+                "bucket": int(b),
+                "bucket_type": btype,
+                "gca_bytes": int(gca_sizes.get(b, 0)),
+                "files": int(bucket_stats.get(b, {}).get("files", 0)),
+                "in": in_b,
+                "out": out_b,
+                "saved": saved,
+                "ratio": ratio,
+                "chosen": _plan_to_dict(plan) if plan is not None else None,
+            }
+        )
+
+    top_buckets_rows.sort(key=lambda r: (-(int(r["saved"])), int(r["out"]), int(r["bucket"])))
+    top_buckets = top_buckets_rows[:5]
+
+    rep: dict[str, Any] = {
+        "schema": "gcc-ocf.dir_pack_report.v1",
+        "mode": "classic_dir_pack",
+        "input_dir": str(input_dir),
+        "output_dir": str(output_dir),
+        "buckets": int(buckets),
+        "files_ok": int(files_ok),
+        "files_fail": int(files_fail),
+        "total_in_blobs": int(total_in_blobs),
+        "total_out_blobs": int(total_out_blobs),
+        "ratio_blobs": float(overall_ratio),
+        "disk": {
+            "manifest_bytes": int(manifest_bytes),
+            "gca_total_bytes": int(gca_total),
+            "gca_files": int(len(gca_sizes)),
+            "approx_total_bytes": int(manifest_bytes + gca_total),
+        },
+        "top_buckets": top_buckets,
+        "top_extensions": _top_rows(ext_stats, k=10),
+        "top_plans": _top_rows(plan_stats, k=10),
+        "buckets_detail": buckets_detail,
+        "errors": list(error_rows)[:200],
+    }
+
+    # Human report (kept short)
+    lines: list[str] = []
+    lines.append("GCC-OCF dir pack — mini-report (classic)\n")
+    lines.append(f"out: {rep['output_dir']}\n")
+    lines.append(
+        f"files_ok={rep['files_ok']} files_fail={rep['files_fail']} buckets={rep['buckets']}\n"
+    )
+    lines.append(
+        f"in={_bytes_h(rep['total_in_blobs'])} out={_bytes_h(rep['total_out_blobs'])} ratio={rep['ratio_blobs']:.3f}\n"
+    )
+    disk = rep["disk"]
+    lines.append(
+        f"disk≈ {_bytes_h(int(disk['approx_total_bytes']))} (manifest={_bytes_h(int(disk['manifest_bytes']))}, gca={_bytes_h(int(disk['gca_total_bytes']))})\n\n"
+    )
+
+    lines.append("Top bucket (per risparmio)\n")
+    if not rep["top_buckets"]:
+        lines.append("  (nessun dato)\n")
+    else:
+        for r in rep["top_buckets"]:
+            b = int(r["bucket"])
+            btype = str(r.get("bucket_type", ""))
+            saved = int(r.get("saved", 0))
+            ratio = float(r.get("ratio", 0.0))
+            gca_b = int(r.get("gca_bytes", 0))
+            chosen = r.get("chosen") or {}
+            plan_str = _plan_key(
+                str(chosen.get("layer_id", "")),
+                str(chosen.get("codec_text", "")),
+                _safe_stream_codecs(chosen.get("stream_codecs")),
+                str(chosen.get("note", "")),
+            )
+            lines.append(
+                f"  bucket[{b:02d}] {btype:14s} saved={_bytes_h(saved)} gca={_bytes_h(gca_b)} ratio={ratio:.3f} plan={plan_str}\n"
+            )
+    lines.append("\nTop estensioni (per risparmio)\n")
+    for r in rep["top_extensions"][:10]:
+        lines.append(
+            f"  {str(r['key']):10s} files={int(r['files']):4d} saved={_bytes_h(int(r['saved']))} ratio={float(r['ratio']):.3f}\n"
+        )
+    lines.append("\n")
+
+    # write files
+    (output_dir / "pack_report.json").write_text(
+        json.dumps(rep, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (output_dir / "pack_report.txt").write_text("".join(lines), encoding="utf-8")
+
+
 def _repo_root() -> Path:
     """Best-effort repo root discovery.
 
@@ -1149,6 +1450,13 @@ def packdir(
     in_total = 0
     out_total = 0
 
+    # Aggregates for pack_report (do not store per-file rows).
+    ext_stats: dict[str, dict[str, int]] = {}
+    plan_stats: dict[str, dict[str, int]] = {}
+    bucket_stats: dict[int, dict[str, int]] = {}
+    bucket_ext_stats: dict[int, dict[str, dict[str, int]]] = {}
+    error_rows: list[dict[str, Any]] = []
+
     writers: dict[int, GCAWriter] = {}
     res_written: dict[int, bool] = {}
 
@@ -1247,12 +1555,9 @@ def packdir(
                 if not rel or not src_path.exists() or not src_path.is_file() or "error" in rr:
                     # record error line and skip
                     n_fail += 1
-                    mf.write(
-                        json.dumps(
-                            {"rel": rel, "error": rr.get("error", "missing")}, ensure_ascii=False
-                        )
-                        + "\n"
-                    )
+                    err_obj = {"rel": rel, "error": rr.get("error", "missing")}
+                    error_rows.append(dict(err_obj))
+                    mf.write(json.dumps(err_obj, ensure_ascii=False) + "\n")
                     continue
                 sz = int(rr.get("size") or 0)
                 if jobs > 1 and spool_threshold and sz and sz <= spool_threshold:
@@ -1292,17 +1597,13 @@ def packdir(
                     continue
                 if not res.get("ok"):
                     n_fail += 1
-                    mf.write(
-                        json.dumps(
-                            {
-                                "rel": rel,
-                                "bucket": int(b),
-                                "error": str(res.get("error") or "compress: unknown"),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
+                    err_obj = {
+                        "rel": rel,
+                        "bucket": int(b),
+                        "error": str(res.get("error") or "compress: unknown"),
+                    }
+                    error_rows.append(dict(err_obj))
+                    mf.write(json.dumps(err_obj, ensure_ascii=False) + "\n")
                     continue
 
                 data = bytes(res["data"])
@@ -1405,17 +1706,39 @@ def packdir(
                     }
                     mf.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+                    # Update aggregates for pack_report
+                    ext = _norm_ext(rel)
+                    ext_row = ext_stats.setdefault(ext, {"files": 0, "in": 0, "out": 0})
+                    ext_row["files"] += 1
+                    ext_row["in"] += len(data)
+                    ext_row["out"] += len(blob)
+
+                    sc_key = sc if isinstance(sc, dict) else None
+                    pkey = _plan_key(plan.layer_id, plan.codec_text, sc_key, plan.note)
+                    p_row = plan_stats.setdefault(pkey, {"files": 0, "in": 0, "out": 0})
+                    p_row["files"] += 1
+                    p_row["in"] += len(data)
+                    p_row["out"] += len(blob)
+
+                    b_row = bucket_stats.setdefault(int(b), {"files": 0, "in": 0, "out": 0})
+                    b_row["files"] += 1
+                    b_row["in"] += len(data)
+                    b_row["out"] += len(blob)
+
+                    be = bucket_ext_stats.setdefault(int(b), {})
+                    be_row = be.setdefault(ext, {"files": 0, "in": 0, "out": 0})
+                    be_row["files"] += 1
+                    be_row["in"] += len(data)
+                    be_row["out"] += len(blob)
+
                     n_ok += 1
                     in_total += len(data)
                     out_total += len(blob)
                 except Exception as e:
                     n_fail += 1
-                    mf.write(
-                        json.dumps(
-                            {"rel": rel, "bucket": b, "error": f"write: {e}"}, ensure_ascii=False
-                        )
-                        + "\n"
-                    )
+                    err_obj = {"rel": rel, "bucket": b, "error": f"write: {e}"}
+                    error_rows.append(dict(err_obj))
+                    mf.write(json.dumps(err_obj, ensure_ascii=False) + "\n")
 
     ratio = (out_total / in_total) if in_total else 0.0
     print(f"packdir: files_ok={n_ok} files_fail={n_fail}")
@@ -1456,9 +1779,95 @@ def packdir(
     except Exception as e:
         print(f"packdir: WARNING autopick_report non scritto: {e}")
 
+    # Mini-report aggregato (per dir pack classico).
+    # - Non influisce sui file legacy: scrive solo output_dir/pack_report.{json,txt}
+    # - In caso di errore, non fallisce il pack (best-effort).
+    try:
+        _write_pack_report(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            buckets=buckets,
+            files_ok=n_ok,
+            files_fail=n_fail,
+            total_in_blobs=in_total,
+            total_out_blobs=out_total,
+            manifest_path=manifest_path,
+            bucket_types=bucket_types,
+            bucket_metrics=bucket_metrics,
+            plans=plans,
+            runners=runners,
+            bucket_autopick=bucket_autopick,
+            bucket_num_res=bucket_num_res,
+            bucket_tpl_res=bucket_tpl_res,
+            ext_stats=ext_stats,
+            plan_stats=plan_stats,
+            bucket_stats=bucket_stats,
+            bucket_ext_stats=bucket_ext_stats,
+            error_rows=error_rows,
+        )
+        if os.environ.get("VERBOSE") == "1":
+            print(f"packdir: pack_report -> {output_dir / 'pack_report.json'}")
+    except Exception as e:
+        if os.environ.get("VERBOSE") == "1":
+            print(f"packdir: WARNING pack_report non scritto: {e}", file=sys.stderr)
+
     # Persist TOP pipelines (best-known plans) for future runs.
     _save_top_db(top_db_path, top_db)
     print(f"packdir: top_pipelines -> {top_db_path}")
+
+    # --- aggregated pack report (classic): ALWAYS write to disk ---
+    rep_json_path = output_dir / "pack_report.json"
+    rep_txt_path = output_dir / "pack_report.txt"
+    try:
+        from gcc_ocf.dir_pack_report import build_dir_pack_report, render_dir_pack_report_text
+
+        rep = build_dir_pack_report(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            buckets=int(buckets),
+            files_ok=int(locals().get("n_ok", 0)),
+            files_fail=int(locals().get("n_fail", 0)),
+            total_in=int(locals().get("in_total", 0)),
+            total_out=int(locals().get("out_total", 0)),
+            bucket_summaries=locals().get("bucket_summaries", {}),
+            file_rows=locals().get("file_rows", []),
+            error_rows=locals().get("error_rows", []),
+            autopick_candidates=locals().get("bucket_autopick", {}),
+        )
+        rep_json_path.write_text(
+            json.dumps(rep, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        rep_txt_path.write_text(render_dir_pack_report_text(rep), encoding="utf-8")
+
+        # Only print to stdout if explicitly requested.
+        if bool(locals().get("print_report_json", False)):
+            print(json.dumps(rep, ensure_ascii=False, indent=2, sort_keys=True))
+        if bool(locals().get("print_report", False)):
+            print(render_dir_pack_report_text(rep), end="")
+
+        if os.environ.get("VERBOSE") == "1":
+            print(f"packdir: pack_report -> {rep_json_path}", file=sys.stderr)
+
+    except Exception as e:
+        # Fallback: still write artifacts so tests/users always find them.
+        stub = {
+            "schema": "gcc-ocf.dir_pack_report.v1",
+            "mode": "classic_gca1",
+            "output_dir": str(output_dir),
+            "error": f"{type(e).__name__}: {e}",
+        }
+        rep_json_path.write_text(
+            json.dumps(stub, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        rep_txt_path.write_text(
+            "GCC-OCF dir pack — mini-report (classic mode)\n"
+            "WARNING: report generation failed.\n"
+            f"error: {type(e).__name__}: {e}\n",
+            encoding="utf-8",
+        )
+        if os.environ.get("VERBOSE") == "1":
+            print(f"packdir: WARNING pack_report failed: {type(e).__name__}: {e}", file=sys.stderr)
+    # --- end aggregated pack report ---
 
 
 def unpackdir(output_dir: Path, restore_dir: Path) -> None:
