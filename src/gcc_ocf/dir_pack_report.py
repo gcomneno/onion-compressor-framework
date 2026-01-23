@@ -1,14 +1,17 @@
 """Aggregated mini-report for classic `dir pack` (manifest.jsonl + bucket_*.gca).
 
 Determinism note:
-This report is part of the classic output directory and is therefore covered by
-`tests/test_p1_determinism.py`. For this reason, the serialized report MUST be
-deterministic across runs given the same input content.
+This report lives in the classic output directory and is therefore covered by
+`tests/test_p1_determinism.py`. The serialized report MUST be deterministic
+across runs given the same input content.
 
-Concretely, we DO NOT embed:
+Therefore we DO NOT embed:
 - timestamps
 - absolute paths (input_dir/output_dir)
-Anything run/environment-specific would break determinism.
+- environment-specific details
+
+We *can* embed deterministic explanations (static text) and deterministic
+aggregations derived from the produced artifacts (manifest.jsonl, bucket stats).
 """
 
 from __future__ import annotations
@@ -96,6 +99,34 @@ def _load_manifest_rows(output_dir: Path) -> list[dict[str, Any]]:
         if isinstance(obj, dict):
             rows.append(obj)
     return rows
+
+
+def _cand_to_public(c: dict[str, Any]) -> dict[str, Any]:
+    # Keep only stable, deterministic fields.
+    return {
+        "plan": {
+            "layer_id": c.get("layer_id"),
+            "codec_text": c.get("codec_text"),
+            "stream_codecs": c.get("stream_codecs"),
+            "note": c.get("note") or c.get("plan_note"),
+        },
+        "score": _safe_float(c.get("score"), 1e9),
+        "ratio": _safe_float(c.get("ratio"), 1e9),
+    }
+
+
+def _sort_candidates(cands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Deterministic order: score asc, ratio asc, plan_key asc.
+    def key(c: dict[str, Any]) -> tuple[float, float, str]:
+        plan = {
+            "layer_id": c.get("layer_id"),
+            "codec_text": c.get("codec_text"),
+            "stream_codecs": c.get("stream_codecs"),
+            "note": c.get("note") or c.get("plan_note"),
+        }
+        return (_safe_float(c.get("score"), 1e9), _safe_float(c.get("ratio"), 1e9), _plan_key(plan))
+
+    return sorted(cands, key=key)
 
 
 def build_dir_pack_report(
@@ -191,7 +222,7 @@ def build_dir_pack_report(
     top_extensions = _top_rows(ext_stats, 10)
     top_plans = _top_rows(plan_stats, 10)
 
-    # Buckets: keep deterministic ordering and omit volatile details.
+    # Buckets: deterministic ordering.
     top_buckets: list[dict[str, Any]] = []
     buckets_detail: dict[str, Any] = {}
 
@@ -218,6 +249,20 @@ def build_dir_pack_report(
         saved = in_b - out_b
         ratio = (out_b / in_b) if in_b else 0.0
 
+        # WHY (deterministic): based on provided candidates (if any).
+        cands_obj = None
+        if isinstance(autopick_candidates, dict):
+            cands_obj = (
+                autopick_candidates.get(b)
+                or autopick_candidates.get(str(b))
+                or autopick_candidates.get(f"{b:02d}")
+            )
+        cands_list = [c for c in (cands_obj or []) if isinstance(c, dict)]
+        ok_cands = [c for c in cands_list if c.get("ok") is True]
+        sorted_ok = _sort_candidates(ok_cands)
+        top3 = [_cand_to_public(c) for c in sorted_ok[:3]]
+        selected_by = "autopick" if sorted_ok else "heuristic_or_spec"
+
         buckets_detail[f"{b:02d}"] = {
             "bucket": b,
             "bucket_type": btype,
@@ -227,6 +272,10 @@ def build_dir_pack_report(
             "saved": saved,
             "ratio": float(ratio),
             "chosen": chosen,
+            "why": {
+                "selected_by": selected_by,
+                "top_candidates": top3,
+            },
         }
 
         top_buckets.append(
@@ -257,6 +306,12 @@ def build_dir_pack_report(
     return {
         "schema": "gcc-ocf.dir_pack_report.v1",
         "mode": "classic_gca1",
+        "stack_profile": "classic_gca1",
+        "stack_model": {
+            "classic": "slice_via_index + bucket_archives",
+            "single_container": "framing_container + index",
+            "single_container_mixed": "framing_container(text+bin) + indexes",
+        },
         "buckets": int(buckets),
         "files_ok": int(files_ok),
         "files_fail": int(files_fail),
@@ -275,6 +330,9 @@ def render_dir_pack_report_text(rep: dict[str, Any]) -> str:
     # Deterministic text: no timestamps, no paths.
     lines: list[str] = []
     lines.append("GCC-OCF dir pack — mini-report (classic mode)\n")
+    lines.append("Stack model: classic = slice_via_index + bucket_archives (GCA1)\n")
+    lines.append("Nota: single/mixed = framing_container + index (bundle + index).\n\n")
+
     lines.append(
         f"files_ok={rep.get('files_ok')} files_fail={rep.get('files_fail')} buckets={rep.get('buckets')}\n"
     )
@@ -316,5 +374,18 @@ def render_dir_pack_report_text(rep: dict[str, Any]) -> str:
                 f"  {str(r.get('key'))}\n    files={_safe_int(r.get('files'), 0)} saved={_bytes_h(_safe_int(r.get('saved'), 0))} ratio={_safe_float(r.get('ratio'), 0.0):.3f}\n"
             )
         lines.append("\n")
+
+    # Per-bucket WHY (short)
+    lines.append("Perché (per-bucket, sintetico)\n")
+    bd = rep.get("buckets_detail") or {}
+    if isinstance(bd, dict) and bd:
+        for k in sorted(bd.keys()):
+            d = bd.get(k) or {}
+            b = _safe_int(d.get("bucket"), _safe_int(k, 0))
+            why = d.get("why") or {}
+            sel = str(why.get("selected_by") or "")
+            lines.append(f"  bucket[{b:02d}] selected_by={sel}\n")
+    else:
+        lines.append("  (nessun dato)\n")
 
     return "".join(lines)
