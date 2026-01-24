@@ -10,13 +10,14 @@ def _enc_varint(x: int) -> bytes:
     if x < 0:
         raise ValueError("varint negativo non supportato")
     out = bytearray()
+    out_append = out.append
     while True:
         b = x & 0x7F
         x >>= 7
         if x:
-            out.append(0x80 | b)
+            out_append(0x80 | b)
         else:
-            out.append(b)
+            out_append(b)
             break
     return bytes(out)
 
@@ -24,8 +25,9 @@ def _enc_varint(x: int) -> bytes:
 def _dec_varint(buf: bytes, idx: int) -> tuple[int, int]:
     shift = 0
     x = 0
+    n = len(buf)
     while True:
-        if idx >= len(buf):
+        if idx >= n:
             raise ValueError("varint troncato")
         b = buf[idx]
         idx += 1
@@ -109,27 +111,40 @@ class CodecNumV1:
         dict_raw = encode_ints(dict_vals)
 
         codes = bytearray()
+        codes_extend = codes.extend
+        enc = _enc_varint
+        zz = _zigzag_enc
+
         for n in ints:
             j = idx_map.get(n)
             if j is not None:
-                codes += _enc_varint(j + 1)
+                codes_extend(enc(j + 1))
             else:
-                codes += _enc_varint(0)
-                codes += _enc_varint(_zigzag_enc(int(n)))
+                codes_extend(enc(0))
+                codes_extend(enc(zz(int(n))))
 
-        return _enc_varint(K) + dict_raw + bytes(codes)
+        # Build in a single pass to avoid quadratic concatenation.
+        out = bytearray()
+        out.extend(enc(K))
+        out.extend(dict_raw)
+        out.extend(codes)
+        return bytes(out)
 
     def _encode_codes(self, ints: list[int], dict_vals: list[int]) -> bytes:
         """Encode only the code-stream using the provided dict."""
         idx_map: dict[int, int] = {v: i for i, v in enumerate(dict_vals)}
         codes = bytearray()
+        codes_extend = codes.extend
+        enc = _enc_varint
+        zz = _zigzag_enc
+
         for n in ints:
             j = idx_map.get(n)
             if j is not None:
-                codes += _enc_varint(j + 1)
+                codes_extend(enc(j + 1))
             else:
-                codes += _enc_varint(0)
-                codes += _enc_varint(_zigzag_enc(int(n)))
+                codes_extend(enc(0))
+                codes_extend(enc(zz(int(n))))
         return bytes(codes)
 
     def compress(self, data: bytes) -> bytes:
@@ -157,8 +172,9 @@ class CodecNumV1:
 
         # Frequency table
         freq: dict[int, int] = {}
+        freq_get = freq.get
         for n in ints:
-            freq[n] = freq.get(n, 0) + 1
+            freq[n] = freq_get(n, 0) + 1
 
         # If not enough variety or repetition, dict won't help
         if len(freq) < 4:
@@ -193,32 +209,37 @@ class CodecNumV1:
         mode = blob[3]
         payload = blob[4:]
 
+        dec = _dec_varint
+        zz = _zigzag_dec
+
         if mode == self.MODE_RAW:
             out = payload
         elif mode == self.MODE_DICT:
             idx = 0
-            K, idx = _dec_varint(payload, idx)
+            K, idx = dec(payload, idx)
             if K <= 0 or K > 1_000_000:
                 raise ValueError(f"num_v1: K non valido: {K}")
 
             # decode K dict ints
             dict_vals: list[int] = []
+            dict_append = dict_vals.append
             for _ in range(int(K)):
-                u, idx = _dec_varint(payload, idx)
-                dict_vals.append(_zigzag_dec(u))
+                u, idx = dec(payload, idx)
+                dict_append(zz(u))
 
             ints: list[int] = []
+            ints_append = ints.append
             # parse codes until EOF
             while idx < len(payload):
-                code, idx = _dec_varint(payload, idx)
+                code, idx = dec(payload, idx)
                 if code == 0:
-                    u, idx = _dec_varint(payload, idx)
-                    ints.append(_zigzag_dec(u))
+                    u, idx = dec(payload, idx)
+                    ints_append(zz(u))
                 else:
                     j = int(code) - 1
                     if j < 0 or j >= len(dict_vals):
                         raise ValueError(f"num_v1: code fuori dizionario: {code}")
-                    ints.append(dict_vals[j])
+                    ints_append(dict_vals[j])
 
             out = encode_ints(ints)
         elif mode == self.MODE_SHARED:
@@ -232,17 +253,18 @@ class CodecNumV1:
                 raise ValueError("num_v1: shared dict tag mismatch")
             dict_vals = self._shared_vals
             ints: list[int] = []
+            ints_append = ints.append
             idx = 0
             while idx < len(codes_payload):
-                code, idx = _dec_varint(codes_payload, idx)
+                code, idx = dec(codes_payload, idx)
                 if code == 0:
-                    u, idx = _dec_varint(codes_payload, idx)
-                    ints.append(_zigzag_dec(u))
+                    u, idx = dec(codes_payload, idx)
+                    ints_append(zz(u))
                 else:
                     j = int(code) - 1
                     if j < 0 or j >= len(dict_vals):
                         raise ValueError(f"num_v1: code fuori dizionario: {code}")
-                    ints.append(dict_vals[j])
+                    ints_append(dict_vals[j])
             out = encode_ints(ints)
         else:
             raise ValueError(f"num_v1: mode sconosciuto: {mode}")
