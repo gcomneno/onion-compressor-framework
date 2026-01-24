@@ -195,6 +195,65 @@ Questo documento usa due categorie, coerenti con la semantica “verify”:
 
 ---
 
+### 2.8 Esempi byte-level (golden vectors)
+
+Questi esempi sono **deliberatamente piccoli** e servono a “inchiodare” il formato MBN in modo testabile.
+Nel repo sono coperti da `tests/test_mbn_vectors.py`.
+
+#### Esempio A — 1 stream (MAIN, codec=raw)
+
+Hex:
+
+```
+4d 42 4e  01  00 03  03 03 00  61 62 63
+```
+
+Breakdown:
+
+- `4d 42 4e` = `"MBN"`
+- `01` = `nstreams=1`
+- Stream #1:
+  - `00` = `stype=MAIN`
+  - `03` = `codec=raw` (codec_code=3)
+  - `03` = `ulen=3`
+  - `03` = `clen=3`
+  - `00` = `mlen=0`
+  - `comp` = `61 62 63` (`b"abc"`)
+
+#### Esempio B — 2 stream (TEXT + NUMS)
+
+Hex:
+
+```
+4d 42 4e  02
+  0a 06  05 02 00  01 02
+  0b 07  04 01 01  ff  aa
+```
+
+Breakdown:
+
+- `4d 42 4e` = `"MBN"`
+- `02` = `nstreams=2`
+- Stream #1:
+  - `0a` = `stype=TEXT` (10)
+  - `06` = `codec=zlib` (codec_code=6)
+  - `05` = `ulen=5`
+  - `02` = `clen=2`
+  - `00` = `mlen=0`
+  - `comp` = `01 02`
+- Stream #2:
+  - `0b` = `stype=NUMS` (11)
+  - `07` = `codec=num_v1` (codec_code=7)
+  - `04` = `ulen=4`
+  - `01` = `clen=1`
+  - `01` = `mlen=1`
+  - `meta` = `ff`
+  - `comp` = `aa`
+
+**Nota importante:** in MBN `codec` è un *code* (u8) che riusa la tabella `codec_code` del container v6.
+Il significato semantico (TEXT/NUMS/TPL/IDS ecc.) è determinato dallo `stype` e dal layer che lo consuma.
+
+
 ## 3) Compatibilità
 
 - Il decoder “universale” (d7) gestisce v1–v6 e v6+MBN.
