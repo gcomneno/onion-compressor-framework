@@ -13,6 +13,7 @@ from pathlib import Path
 #   are NOT considered ORCH, because they are contracts and may be imported by legacy.
 ORCH_PREFIXES: tuple[str, ...] = (
     "gcc_ocf.cli",
+    "gcc_ocf.cli_verify_json",
     "gcc_ocf.verify",
     "gcc_ocf.single_container_dir",
     "gcc_ocf.single_container_mixed_dir",

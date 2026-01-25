@@ -1,5 +1,5 @@
 # Roadmap (GCC-OCF)
-Ultimo aggiornamento: 2026-01-21
+Ultimo aggiornamento: 2026-01-25
 
 Questa roadmap vive in root perché è “developer-facing”: deve stare sotto gli occhi.
 La documentazione di dettaglio resta in `docs/`.
@@ -43,14 +43,21 @@ La documentazione di dettaglio resta in `docs/`.
 
 ### Numeri (codec)
 - [ ] Potenziare `num_v1` (delta/zigzag/RLE) mantenendo compatibilità via meta-version (non “silenziosamente diverso”).
-- [ ] Test vectors deterministici per `num_v1` (encode/decode).
+- [x] Test vectors deterministici per `num_v1` (encode/decode).
 
 ### MBN
 - [ ] Stabilizzare e documentare MBN: campi, stream types, invarianti, test vectors (byte-level), esempi reali.
 
 ### Verify semantics
 - [ ] Documentare formalmente: quando un errore è `CorruptPayload` vs `HashMismatch` (tamper).
-- [ ] “verify --json”: schema output stabile (ok+error).
+- [x] “verify --json”: schema output stabile (ok+error).
+
+### CLI hardening (nato “a cascata” durante i lavori)
+- [x] Centralizzare gli exit codes (niente numeri magici nel CLI; source of truth in `errors.py` + doc generata).
+- [ ] Allineare tutti i comandi CLI che stampano errori a una policy coerente:
+  - `--json` => solo JSON su stderr in caso di errore
+  - non-JSON => messaggio umano su stderr
+  (evitare output misti che rendono difficile piping/automation)
 
 ---
 
